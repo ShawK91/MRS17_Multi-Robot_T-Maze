@@ -6,6 +6,7 @@ import torch.nn as nn, torch
 from torch.nn import Parameter
 import torch
 import random
+from operator import add
 
 #TODO Evolution diversity
 #TODO Champion testing report
@@ -75,6 +76,7 @@ class Parameters:
 
         self.corridor_bound = [1,1]
         self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
+        self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
         self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
 
@@ -348,7 +350,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         team_ind = np.zeros(self.parameters.num_agents).astype(int)  # Team definitions by index
 
         #Generate training map and solution to test on for the epoch
-        train_x, train_y = self.get_training_maze()
+        set_train_x, set_train_y = self.get_training_maze(self.parameters.num_train_evals)
+
 
         # MAIN LOOP
         for _ in range(self.parameters.population_size * self.parameters.num_evals_ccea):  # For evaluation
@@ -359,8 +362,10 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 team_ind[i] = agent_pop.selection_pool.pop(choice)
 
             # SIMULATION AND TRACK REWARD
-            fitnesses = self.compute_fitness(team_ind, train_x, train_y)  # Returns rewards for each member of the team
-            #if sum(fitnesses) > sum(tr_best_epoch_fitness): tr_best_epoch_fitness = fitnesses
+            fitnesses = [0]*self.parameters.num_agents
+            for train_x, train_y in zip(set_train_x, set_train_y): #For all maps in the training set
+                fitnesses = map(add, fitnesses, self.compute_fitness(team_ind, train_x, train_y)/self.parameters.num_train_evals)  # Returns rewards for each member of the team for each individual training map
+
 
             # ENCODE fitness back to each agent populations
             for i, agent_pop in enumerate(self.all_agents):
@@ -375,8 +380,10 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             champion_team.append(agent_pop.best_index)
 
         #Run simulation of champion team
-        test_x, test_y = self.get_training_maze()
-        champion_fitness = self.compute_fitness(champion_team, test_x, test_y)
+        set_test_x, set_test_y = self.get_training_maze(self.parameters.num_train_evals*2)
+        champion_fitness = [0] * self.parameters.num_agents
+        for test_x, test_y in zip(set_test_x, set_test_y):
+            champion_fitness = map(add, champion_fitness, self.compute_fitness(champion_team, test_x, test_y)/len(set_test_x))
 
 
         #Save population and HOF
@@ -393,21 +400,26 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
         return tr_best_gen_fitness, champion_fitness
 
-    def get_training_maze(self):
-        # Distraction/Hallway parts
-        train_x = []; train_y = [[],[],[]]
-        for junction in range(self.parameters.depth):
-            corridor_len = randint(self.parameters.corridor_bound[0], self.parameters.corridor_bound[1])
-            for i in range(corridor_len-1, -1, -1):
-                train_x.append(i)
-            for div in train_y:
-                div.append(1 if random.random()<0.5 else -1)
+    def get_training_maze(self, num_examples):
+        set_x = []; set_y = []
+        for _ in range(num_examples):
 
-        #Make sure the target (goal location) for each division aren't the same
-        if train_y[0] == train_y[1]: train_y[0][randint(0, self.parameters.depth -1)] *= -1
-        if train_y[1] == train_y[2]: train_y[2][randint(0, self.parameters.depth - 1)] *= -1
+            # Distraction/Hallway parts
+            train_x = []; train_y = [[],[],[]]
+            for junction in range(self.parameters.depth):
+                corridor_len = randint(self.parameters.corridor_bound[0], self.parameters.corridor_bound[1])
+                for i in range(corridor_len-1, -1, -1):
+                    train_x.append(i)
+                for div in train_y:
+                    div.append(1 if random.random()<0.5 else -1)
 
-        return train_x, train_y
+            #Make sure the target (goal location) for each division aren't the same
+            if train_y[0] == train_y[1]: train_y[0][randint(0, self.parameters.depth -1)] *= -1
+            if train_y[1] == train_y[2]: train_y[2][randint(0, self.parameters.depth - 1)] *= -1
+
+            set_x.append(train_x); set_y.append(train_y)
+
+        return set_x, set_y
 
 
 
