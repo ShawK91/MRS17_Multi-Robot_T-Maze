@@ -7,6 +7,9 @@ from torch.nn import Parameter
 import torch
 import random
 
+#TODO Evolution diversity
+
+
 class Tracker(): #Tracker
     def __init__(self, parameters):
         self.foldername = parameters.save_foldername + '/0000_CSV'
@@ -46,8 +49,8 @@ class SSNE_param:
         self.num_hnodes = 15
         self.num_output = 1
 
-        self.elite_fraction = 0.1
-        self.crossover_prob = 0.1
+        self.elite_fraction = 0.03
+        self.crossover_prob = 0
         self.mutation_prob = 0.9
         self.weight_magnitude_limit = 10000000
         #self.mut_distribution = 0 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
@@ -55,47 +58,52 @@ class SSNE_param:
 class Parameters:
     def __init__(self):
 
-            #SSNE stuff
-            self.population_size = 100
-            self.ssne_param = SSNE_param()
-            self.total_gens = 100000
-            #Determine the nerual archiecture
-            self.arch_type = 2 #1 TF_FEEDFORWARD
-                               #2 PyTorch GRU-MB
+        #SSNE stuff
+        self.population_size = 100
+        self.ssne_param = SSNE_param()
+        self.total_gens = 100000
+        #Determine the nerual archiecture
+        self.arch_type = 2 #1 TF_FEEDFORWARD
+                           #2 PyTorch GRU-MB
 
-            #Task Params
-            self.depth = 2
-            self.is_dynamic_depth = False #Makes the task seq len dynamic
-            self.dynamic_depth_limit = [1,10]
+        #Task Params
+        self.depth = 1
+        self.is_dynamic_depth = False #Makes the task seq len dynamic
+        self.dynamic_depth_limit = [1,10]
 
-            self.corridor_bound = [1,1]
-            self.num_evals_ccea = 5 #Number of different teams to test the same individual in before assigning a score
+        self.corridor_bound = [1,1]
+        self.num_evals_ccea = 5 #Number of different teams to test the same individual in before assigning a score
 
-            self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
-
-
-            #Multi-Agent Params
-            self.num_agents = 2
-
-            #Reward
-            self.rew_multi_success = 1.0
-            self.rew_single_success = 0.2
-            self.rew_same_path = 0.05
+        self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
 
 
-            if self.arch_type == 1: self.arch_type = 'TF_Feedforward'
-            elif self.arch_type ==2: self.arch_type = 'PyTorch GRU-MB'
-            elif self.arch_type == 3: self.arch_type = 'PyTorch Feedforward'
-            else: sys.exit('Invalid choice of neural architecture')
+        #Multi-Agent Params
+        self.num_agents = 1
 
-            self.save_foldername = 'R_Multi-Agent_TMaze/'
+        #Reward
+        self.rew_multi_success = 0.0  /(self.num_trials)
+        self.rew_single_success = 1.0  /(self.num_trials)
+        self.rew_same_path = 0.0  /(self.num_trials)
+        self.explore_reward = 0.0  /(self.num_trials-1)
 
-            # BackProp
-            self.bprop_max_gens = 100
-            self.bprop_train_examples = 1000
-            self.skip_bprop = False
-            self.load_seed = False  # Loads a seed population from the save_foldername
-            # IF FALSE: Runs Backpropagation, saves it and uses that
+
+        if self.arch_type == 1: self.arch_type = 'TF_Feedforward'
+        elif self.arch_type ==2: self.arch_type = 'PyTorch GRU-MB'
+        elif self.arch_type == 3: self.arch_type = 'PyTorch Feedforward'
+        else: sys.exit('Invalid choice of neural architecture')
+
+        self.save_foldername = 'R_Multi-Agent_TMaze/'
+
+        # BackProp
+        self.bprop_max_gens = 100
+        self.bprop_train_examples = 1000
+        self.skip_bprop = False
+        self.load_seed = False  # Loads a seed population from the save_foldername
+        # IF FALSE: Runs Backpropagation, saves it and uses that
+
+        print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents
+
+
 
 
 class GRUMB(nn.Module):
@@ -174,10 +182,12 @@ class Agent_Pop:
         self.pop = []
         for _ in range(self.parameters.population_size):
             self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
+        self.champion_ind = None
 
         #Fitness evaluation list for the generation
         self.fitness_evals = [[0.0] for x in xrange(self.parameters.population_size)]
         self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
+
 
 
     def reset(self):
@@ -254,6 +264,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             team[-1].reset()
 
 
+        all_path_simulation = [[[],[]] for _ in range (self.parameters.num_agents)] #Store all path taken by each agent through the entrie simulation (all trials))
         fitnesses = np.zeros(len(team)) #Stores the actual fitnesses
         for trial in range(self.parameters.num_trials): #For each trial
 
@@ -262,9 +273,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 x = Variable(torch.Tensor([0, individual.agent_sensor, individual.last_reward]), requires_grad=True); x = x.unsqueeze(0)
                 individual.forward(x)
 
-            #Reset path out that collects path out for each individual
-            path_out = []
-            for _ in range(len(team)): path_out.append([])
+            #Reset path out that collects path out for each individual for each trial
+            path_out = [[] for _ in range(self.parameters.num_agents)]
 
             #Run through the maze and collect path chosen by each individual
             for i, individual in enumerate(team):
@@ -272,18 +282,24 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                     x = Variable(torch.Tensor([step, 0, 0]), requires_grad=True); x = x.unsqueeze(0)
                     out = individual.forward(x)
                     if step == 0: #For each junction
-                        net_out = out.data.numpy()[0]
+                        net_out = out.data.numpy()[0][0]
                         if net_out < 0: path_out[i].append(-1)
                         else: path_out[i].append(1)
+                all_path_simulation[i][0].append(path_out[i])
 
 
             y = train_y[trial/(self.parameters.num_trials/3)]  # Pick the correct reward location
-            #Update reward and is_other agent
+            #Reset reward and is_other agent, and also single rewards
             is_multi_success = True #Did all agents converge at reward?
             for i, individual in enumerate(team):
                 individual.last_reward = 0.0;  individual.agent_sensor = 0.0 #Reset last reward value and agent sensor
-                if path_out[i] == y: individual.last_reward += self.parameters.rew_single_success #Single agent reward
-                else: is_multi_success = False
+                if path_out[i] == y:
+                    individual.last_reward += self.parameters.rew_single_success #Single agent reward
+                    all_path_simulation[i][1].append(1)
+                else:
+                    is_multi_success = False
+                    all_path_simulation[i][1].append(0)
+
 
             #Did all agents take the same path?
             is_same_path = True
@@ -292,7 +308,6 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                     if path1 != path2:
                         is_same_path = False
                         break
-
                 if not is_same_path: break;
 
             #Give reward for multi_agent_success
@@ -303,16 +318,31 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                     individual.last_reward += self.parameters.rew_same_path
                     individual.agent_sensor = 1.0
 
-
             #Disburse fitnesses
             for i, individual in enumerate(team):
                 fitnesses[i] += individual.last_reward
 
-        return fitnesses/(self.parameters.num_trials*len(team_ind)) #
+        #Reward based on exploration
+        for individual_id, individual in enumerate(team):
+            for path_id, single_path in enumerate(all_path_simulation[individual_id][0]):
+                if path_id == 0: continue #Skip the first path
+                is_explore = True
+                for history in range(self.parameters.num_trials/3):
+                    check_index = path_id - history
+                    #if check_index < 0 or all_path_simulation[individual_id][1][check_index] == 1: break
+                    if check_index < 0: break #TODO TEST
+                    if all_path_simulation[individual_id][0][check_index] == single_path:
+                        is_explore = False
+                        break
+                if is_explore: fitnesses[individual_id] += self.parameters.explore_reward
+
+
+
+        return fitnesses
 
 
     def evolve(self, gen):
-        best_epoch_fitness = 0.0
+        tr_best_epoch_fitness = [0,0]
 
         # Reset all agent's fitness and sampling pool
         for agent_pop in self.all_agents:
@@ -332,29 +362,33 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
             # SIMULATION AND TRACK REWARD
             fitnesses = self.compute_fitness(team_ind, train_x, train_y)  # Returns rewards for each member of the team
-            if sum(fitnesses) > best_epoch_fitness: best_epoch_fitness = sum(fitnesses)
+            if sum(fitnesses) > sum(tr_best_epoch_fitness): tr_best_epoch_fitness = fitnesses
 
             # ENCODE fitness back to each agent populations
             for i, agent_pop in enumerate(self.all_agents):
                 agent_pop.fitness_evals[team_ind[i]] += fitnesses[i]
 
+        #Get champion index and run champion indiviual team
+        #for agent_pop in
 
-        # #Save population and HOF
-        # if gen % 100 == 0:
-        #     for index, individual in enumerate(self.pop): #Save population
-        #         self.save(individual, self.save_foldername + 'Simulator_' + str(index))
-        #     self.save(self.pop[champion_index], self.save_foldername + 'Champion_Simulator') #Save champion
-        #     np.savetxt(self.save_foldername + '/gen_tag', np.array([gen + 1]), fmt='%.3f', delimiter=',')
+
+        #Save population and HOF
+        if gen % 100 == 0:
+            for pop_ind, agent_pop in enumerate(self.all_agents):
+                for individial_ind, individual in enumerate(agent_pop.pop): #Save population
+                    self.save(individual, self.save_foldername + 'Multi_TMaze_' + str(pop_ind) + '_' + str(individial_ind))
+                #self.save(self.pop[champion_index], self.save_foldername + 'Champion_Simulator') #Save champion
+                np.savetxt(self.save_foldername + '/gen_tag', np.array([gen + 1]), fmt='%.3f', delimiter=',')
 
         #SSNE Epoch: Selection and Mutation/Crossover step
         for agent_pop in self.all_agents:
             #Obtain fitness evals as an average of the fitness evaluations fone during the epoch
             fitness_evals = []
-            for samples in agent_pop.fitness_evals: fitness_evals.append(sum(samples)/len(samples))
+            for samples in agent_pop.fitness_evals: fitness_evals.append(max(samples)) #Use leniency
 
             self.ssne.epoch(agent_pop.pop, fitness_evals)
 
-        return best_epoch_fitness
+        return tr_best_epoch_fitness
 
     def get_training_maze(self):
         # Distraction/Hallway parts
@@ -365,6 +399,11 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 train_x.append(i)
             for div in train_y:
                 div.append(1 if random.random()<0.5 else -1)
+
+        #Make sure the target (goal location) for each division aren't the same
+        if train_y[0] == train_y[1]: train_y[0][randint(0, self.parameters.depth -1)] *= -1
+        if train_y[1] == train_y[2]: train_y[2][randint(0, self.parameters.depth - 1)] *= -1
+
         return train_x, train_y
 
 
@@ -372,13 +411,13 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 if __name__ == "__main__":
     parameters = Parameters()  # Create the Parameters class
     tracker = Tracker(parameters)  # Initiate tracker
-    print 'Running Simulator Training ', parameters.arch_type
+    print 'Multi-Agent TMaze Training ', parameters.arch_type
 
     sim_task = Task_Multi_TMaze(parameters)
     for gen in range(1, parameters.total_gens):
         gen_best_fitness = sim_task.evolve(gen)
-        print 'Generation:', gen, ' Epoch_reward:', "%0.2f" % gen_best_fitness#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
-        tracker.add_fitness(gen_best_fitness, gen)  # Add average global performance to tracker
+        print 'Generation:', gen, ' Epoch_reward:', gen_best_fitness#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
+        tracker.add_fitness(sum(gen_best_fitness)/parameters.num_agents, gen)  # Add average global performance to tracker
         #tracker.add_hof_fitness(valid_score, gen)  # Add best global performance to tracker
 
 

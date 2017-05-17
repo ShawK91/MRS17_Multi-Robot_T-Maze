@@ -281,6 +281,7 @@ class Torch_SSNE:
         num_mutation_frac = 0.2
         super_mut_strength = 10
         super_mut_prob = 0.05
+        reset_prob = super_mut_prob + 0.05
 
         # References to the variable tensors
         W = list(gene.parameters())
@@ -296,10 +297,15 @@ class Torch_SSNE:
             for _ in range(num_mutations):
                 ind_dim1 = randint(0, randint(0, W[tensor_choice].size()[0] - 1))
                 ind_dim2 = randint(0, randint(0, W[tensor_choice].size()[-1] - 1))
-                if random.random() < super_mut_prob:
+                random_num = random.random()
+
+                if random_num < super_mut_prob: #Super Mutation probability
                     W[tensor_choice].data[ind_dim1, ind_dim2] += random.gauss(0, super_mut_strength *
                                                                               W[tensor_choice].data[ind_dim1, ind_dim2])
-                else:
+                elif random_num < reset_prob: #Reset probability
+                    W[tensor_choice].data[ind_dim1, ind_dim2] = random.gauss(0, W[tensor_choice].data[ind_dim1, ind_dim2])
+
+                else: #mutauion even normal
                     W[tensor_choice].data[ind_dim1, ind_dim2] += random.gauss(0, mut_strength * W[tensor_choice].data[
                         ind_dim1, ind_dim2])
 

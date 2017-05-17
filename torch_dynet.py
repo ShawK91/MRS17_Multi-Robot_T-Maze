@@ -9,8 +9,6 @@ import random
 import numpy as np, sys
 
 #TODO Weight Initialization
-#TODO Save/Load
-#TODO Dynamic length seq_prediction
 
 
 def test_sequence_data(num_examples, seq_len):
@@ -97,7 +95,7 @@ class GRUMB(nn.Module):
 if __name__ == '__main__':
     seq_len_train = 21
     seq_len_test = 21
-    num_train_examples = 10000
+    num_train_examples = 1000
     num_test_examples = 1000
     num_epochs = 100
 
