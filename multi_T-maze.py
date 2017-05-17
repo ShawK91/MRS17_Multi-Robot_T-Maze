@@ -8,6 +8,8 @@ import torch
 import random
 
 #TODO Evolution diversity
+#TODO Champion testing report
+#TODO Static team
 
 
 class Tracker(): #Tracker
@@ -25,7 +27,7 @@ class Tracker(): #Tracker
             self.fitnesses.pop(0)
         self.avg_fitness = sum(self.fitnesses)/len(self.fitnesses)
         if generation % 10 == 0: #Save to csv file
-            filename = self.foldername + '/train_' + self.file_save
+            filename = self.foldername + '/epoch_best_' + self.file_save
             self.tr_avg_fit.append(np.array([generation, self.avg_fitness]))
             np.savetxt(filename, np.array(self.tr_avg_fit), fmt='%.3f', delimiter=',')
 
@@ -35,7 +37,7 @@ class Tracker(): #Tracker
             self.hof_fitnesses.pop(0)
         self.hof_avg_fitness = sum(self.hof_fitnesses)/len(self.hof_fitnesses)
         if generation % 10 == 0: #Save to csv file
-            filename = self.foldername + '/valid_' + self.file_save
+            filename = self.foldername + '/champion_' + self.file_save
             self.hof_tr_avg_fit.append(np.array([generation, self.hof_avg_fitness]))
             np.savetxt(filename, np.array(self.hof_tr_avg_fit), fmt='%.3f', delimiter=',')
 
@@ -67,12 +69,12 @@ class Parameters:
                            #2 PyTorch GRU-MB
 
         #Task Params
-        self.depth = 1
+        self.depth = 2
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
         self.corridor_bound = [1,1]
-        self.num_evals_ccea = 5 #Number of different teams to test the same individual in before assigning a score
+        self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
 
         self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
 
@@ -185,14 +187,13 @@ class Agent_Pop:
         self.champion_ind = None
 
         #Fitness evaluation list for the generation
-        self.fitness_evals = [[0.0] for x in xrange(self.parameters.population_size)]
+        self.fitness_evals = [0.0] * self.parameters.population_size
         self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
-
 
 
     def reset(self):
         #Fitness evaluation list for the generation
-        self.fitness_evals = [[0.0] for x in xrange(self.parameters.population_size)]
+        self.fitness_evals = [0.0] * self.parameters.population_size
         self.selection_pool = [i for i in range(self.parameters.population_size)] * self.parameters.num_evals_ccea
 
 
@@ -329,20 +330,17 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 is_explore = True
                 for history in range(self.parameters.num_trials/3):
                     check_index = path_id - history
-                    #if check_index < 0 or all_path_simulation[individual_id][1][check_index] == 1: break
-                    if check_index < 0: break #TODO TEST
+                    if check_index < 0 or all_path_simulation[individual_id][1][check_index] == 1: break
+                    #if check_index < 0: break
                     if all_path_simulation[individual_id][0][check_index] == single_path:
                         is_explore = False
                         break
                 if is_explore: fitnesses[individual_id] += self.parameters.explore_reward
 
-
-
         return fitnesses
 
-
     def evolve(self, gen):
-        tr_best_epoch_fitness = [0,0]
+        tr_best_gen_fitness = [0]*parameters.num_agents
 
         # Reset all agent's fitness and sampling pool
         for agent_pop in self.all_agents:
@@ -362,14 +360,23 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
             # SIMULATION AND TRACK REWARD
             fitnesses = self.compute_fitness(team_ind, train_x, train_y)  # Returns rewards for each member of the team
-            if sum(fitnesses) > sum(tr_best_epoch_fitness): tr_best_epoch_fitness = fitnesses
+            #if sum(fitnesses) > sum(tr_best_epoch_fitness): tr_best_epoch_fitness = fitnesses
 
             # ENCODE fitness back to each agent populations
             for i, agent_pop in enumerate(self.all_agents):
-                agent_pop.fitness_evals[team_ind[i]] += fitnesses[i]
+                agent_pop.fitness_evals[team_ind[i]] += fitnesses[i]/self.parameters.num_evals_ccea #Average not leniency
 
-        #Get champion index and run champion indiviual team
-        #for agent_pop in
+        #####Get champion index and run champion indiviual team
+        champion_team = []
+        #Find the champion idnex and bext performance
+        for agent_id, agent_pop in enumerate(self.all_agents):
+            tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals) #Fix best performance
+            agent_pop.best_index = agent_pop.fitness_evals.index(max(agent_pop.fitness_evals))
+            champion_team.append(agent_pop.best_index)
+
+        #Run simulation of champion team
+        test_x, test_y = self.get_training_maze()
+        champion_fitness = self.compute_fitness(champion_team, test_x, test_y)
 
 
         #Save population and HOF
@@ -381,14 +388,10 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 np.savetxt(self.save_foldername + '/gen_tag', np.array([gen + 1]), fmt='%.3f', delimiter=',')
 
         #SSNE Epoch: Selection and Mutation/Crossover step
-        for agent_pop in self.all_agents:
-            #Obtain fitness evals as an average of the fitness evaluations fone during the epoch
-            fitness_evals = []
-            for samples in agent_pop.fitness_evals: fitness_evals.append(max(samples)) #Use leniency
+        for agent_id, agent_pop in enumerate(self.all_agents):
+            self.ssne.epoch(agent_pop.pop, agent_pop.fitness_evals)
 
-            self.ssne.epoch(agent_pop.pop, fitness_evals)
-
-        return tr_best_epoch_fitness
+        return tr_best_gen_fitness, champion_fitness
 
     def get_training_maze(self):
         # Distraction/Hallway parts
@@ -415,10 +418,10 @@ if __name__ == "__main__":
 
     sim_task = Task_Multi_TMaze(parameters)
     for gen in range(1, parameters.total_gens):
-        gen_best_fitness = sim_task.evolve(gen)
-        print 'Generation:', gen, ' Epoch_reward:', gen_best_fitness#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
+        gen_best_fitness, champion_fitness = sim_task.evolve(gen)
+        print 'Generation:', gen, ' Epoch_best_reward:', [i*parameters.num_trials for i in gen_best_fitness], '/', parameters.num_trials , ' Champion_reward:', [i*parameters.num_trials for i in champion_fitness], '/', parameters.num_trials#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
         tracker.add_fitness(sum(gen_best_fitness)/parameters.num_agents, gen)  # Add average global performance to tracker
-        #tracker.add_hof_fitness(valid_score, gen)  # Add best global performance to tracker
+        tracker.add_hof_fitness(sum(champion_fitness)/parameters.num_agents, gen)  # Add best global performance to tracker
 
 
 
