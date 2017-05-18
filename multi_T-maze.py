@@ -10,6 +10,7 @@ from operator import add
 
 #TODO Evolution diversity
 #TODO Static team
+#TODO Depth >=2 Static policy bug
 
 
 class Tracker(): #Tracker
@@ -61,7 +62,7 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 100
+        self.population_size = 1
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
@@ -81,14 +82,14 @@ class Parameters:
 
 
         #Multi-Agent Params
-        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
+        self.static_policy = True #Agent 0 is static policy (num_agents includes this)
         self.num_agents = 1
 
         #Reward
         self.rew_multi_success = 0.0  /(self.num_trials)
-        self.rew_single_success = 1.0  /(self.num_trials)
+        self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 0.0  /(self.num_trials-1)
+        self.explore_reward = 1.0  /(self.num_trials-1)
 
 
         if self.arch_type == 1: self.arch_type = 'TF_Feedforward'
@@ -202,10 +203,11 @@ class Static_policy():
                 self.out = np.zeros(self.paramters.depth) #Boundary condition
             else: #Binary add 1 (explore)
                 carry = 0
-                for i in range(len(self.out)):
-                    j = len(self.out) - i - 1 #Index from the back
-                    self.out[j] += carry
-                    if i == 0: self.out[j] += 1
+                for j in range(len(self.out)-1,-1,-1):
+                    if carry != 0:
+                        self.out[j] += carry
+                        carry = 0
+                    if j == len(self.out)-1 : self.out[j] += 1
                     if self.out[j] == 2:
                         carry = 1
                         self.out[j] = 0
