@@ -9,7 +9,6 @@ import random
 from operator import add
 
 #TODO Evolution diversity
-#TODO Champion testing report
 #TODO Static team
 
 
@@ -82,6 +81,7 @@ class Parameters:
 
 
         #Multi-Agent Params
+        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
         self.num_agents = 1
 
         #Reward
@@ -106,8 +106,6 @@ class Parameters:
         # IF FALSE: Runs Backpropagation, saves it and uses that
 
         print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents
-
-
 
 
 class GRUMB(nn.Module):
@@ -175,28 +173,87 @@ class GRUMB(nn.Module):
         output = out.data.numpy()
         return output
 
+class Static_policy():
+    def __init__(self, parameters):
+        self.paramters = parameters
+
+        self.junction_id = -1
+        self.out = np.ones(self.paramters.depth)
+        self.agent_sensor = 0
+        self.last_reward = 0.0
+
+    def reset(self):
+        self.junction_id = -1
+        self.agent_sensor = -1
+        self.last_reward = 0.0
+        self.out = np.ones(self.paramters.depth)
+
+    def forward(self, input):
+        if input.data.numpy()[0][0] != 0 and input.data.numpy()[0][1] == 0: #Wall and distractors
+            return
+
+        if input.data.numpy()[0][1] != 0: #First forward propagation (ignore) (Update the self.out for the trial)
+            self.last_reward = input.data.numpy()[0][2]
+            self.junction_id = -1
+
+            #Compute output
+            if self.last_reward == 1: None #if found reward last time
+            elif np.all(self.out):
+                self.out = np.zeros(self.paramters.depth) #Boundary condition
+            else: #Binary add 1 (explore)
+                carry = 0
+                for i in range(len(self.out)):
+                    j = len(self.out) - i - 1 #Index from the back
+                    self.out[j] += carry
+                    if i == 0: self.out[j] += 1
+                    if self.out[j] == 2:
+                        carry = 1
+                        self.out[j] = 0
+                return
+
+        else: #Decision taking points (junctions)
+            self.junction_id += 1
+            return Variable(torch.Tensor([[self.out[self.junction_id]]]), requires_grad=0)
+
+
+
+
+
+
+
 
 class Agent_Pop:
-    def __init__(self, parameters, i):
+    def __init__(self, parameters, i, is_static=False):
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
         self.num_input = self.ssne_param.num_input; self.num_hidden = self.ssne_param.num_hnodes; self.num_output = self.ssne_param.num_output
         self.agent_id = i
+        self.is_static = is_static
 
         #####CREATE POPULATION
         self.pop = []
-        for _ in range(self.parameters.population_size):
-            self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
-        self.champion_ind = None
+        if is_static: #Static policy agent
+            self.pop.append(Static_policy(parameters))
+            self.champion_ind = 0
+        else:
+            for _ in range(self.parameters.population_size):
+                self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
+            self.champion_ind = None
 
         #Fitness evaluation list for the generation
         self.fitness_evals = [0.0] * self.parameters.population_size
-        self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
+        if is_static: #Static policy agent
+            self.selection_pool = [0] * self.parameters.population_size * self.parameters.num_evals_ccea
+        else:
+            self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
 
 
     def reset(self):
         #Fitness evaluation list for the generation
         self.fitness_evals = [0.0] * self.parameters.population_size
-        self.selection_pool = [i for i in range(self.parameters.population_size)] * self.parameters.num_evals_ccea
+        if self.is_static: #Static policy agent
+            self.selection_pool = [0] * self.parameters.population_size * self.parameters.num_evals_ccea
+        else:
+            self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
 
 
 class Task_Multi_TMaze: #Mulit-Agent T-Maze
@@ -215,7 +272,10 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         #####Initiate all agents
         self.all_agents = []
         for agent_id in range(self.parameters.num_agents):
-            self.all_agents.append(Agent_Pop(parameters, agent_id))
+            if self.parameters.static_policy and agent_id == 0: #Static policy for agent_id 0
+                self.all_agents.append(Agent_Pop(parameters, agent_id, is_static=True))
+            else:
+                self.all_agents.append(Agent_Pop(parameters, agent_id))
 
         # ###Init population
         # if self.parameters.load_seed: #Load seed population
@@ -286,7 +346,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                     out = individual.forward(x)
                     if step == 0: #For each junction
                         net_out = out.data.numpy()[0][0]
-                        if net_out < 0: path_out[i].append(-1)
+                        if net_out <= 0: path_out[i].append(-1)
                         else: path_out[i].append(1)
                 all_path_simulation[i][0].append(path_out[i])
 
@@ -297,7 +357,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             for i, individual in enumerate(team):
                 individual.last_reward = 0.0;  individual.agent_sensor = 0.0 #Reset last reward value and agent sensor
                 if path_out[i] == y:
-                    individual.last_reward += self.parameters.rew_single_success #Single agent reward
+                    fitnesses[i] += self.parameters.rew_single_success #Single agent reward
+                    individual.last_reward = 1.0
                     all_path_simulation[i][1].append(1)
                 else:
                     is_multi_success = False
@@ -315,15 +376,13 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
             #Give reward for multi_agent_success
             if is_multi_success:
-                for individual in team: individual.last_reward += self.parameters.rew_multi_success
+                for i in range(len(team)):
+                    fitnesses[i] += self.parameters.rew_multi_success
             if is_same_path:
-                for individual in team:
-                    individual.last_reward += self.parameters.rew_same_path
-                    individual.agent_sensor = 1.0
+                for i in range(len(team)):
+                    fitnesses[i] += self.parameters.rew_same_path
+                    team[i].agent_sensor = 1.0
 
-            #Disburse fitnesses
-            for i, individual in enumerate(team):
-                fitnesses[i] += individual.last_reward
 
         #Reward based on exploration
         for individual_id, individual in enumerate(team):
@@ -331,9 +390,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 if path_id == 0: continue #Skip the first path
                 is_explore = True
                 for history in range(self.parameters.num_trials/3):
-                    check_index = path_id - history
+                    check_index = path_id - history -1
                     if check_index < 0 or all_path_simulation[individual_id][1][check_index] == 1: break
-                    #if check_index < 0: break
                     if all_path_simulation[individual_id][0][check_index] == single_path:
                         is_explore = False
                         break
@@ -375,7 +433,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         champion_team = []
         #Find the champion idnex and bext performance
         for agent_id, agent_pop in enumerate(self.all_agents):
-            tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals) #Fix best performance
+            if agent_pop.is_static: tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals)/self.parameters.population_size #Fix best performance
+            else: tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals) #Fix best performance
             agent_pop.best_index = agent_pop.fitness_evals.index(max(agent_pop.fitness_evals))
             champion_team.append(agent_pop.best_index)
 
@@ -396,7 +455,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
         #SSNE Epoch: Selection and Mutation/Crossover step
         for agent_id, agent_pop in enumerate(self.all_agents):
-            self.ssne.epoch(agent_pop.pop, agent_pop.fitness_evals)
+            if not agent_pop.is_static:
+                self.ssne.epoch(agent_pop.pop, agent_pop.fitness_evals)
 
         return tr_best_gen_fitness, champion_fitness
 
