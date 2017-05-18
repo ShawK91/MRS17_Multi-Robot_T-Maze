@@ -9,8 +9,6 @@ import random
 from operator import add
 
 #TODO Evolution diversity
-#TODO Static team
-#TODO Depth >=2 Static policy bug
 
 
 class Tracker(): #Tracker
@@ -62,7 +60,7 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 1
+        self.population_size = 10
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
@@ -70,7 +68,7 @@ class Parameters:
                            #2 PyTorch GRU-MB
 
         #Task Params
-        self.depth = 2
+        self.depth = 5
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
@@ -83,7 +81,7 @@ class Parameters:
 
         #Multi-Agent Params
         self.static_policy = True #Agent 0 is static policy (num_agents includes this)
-        self.num_agents = 1
+        self.num_agents = 2
 
         #Reward
         self.rew_multi_success = 0.0  /(self.num_trials)
@@ -112,6 +110,7 @@ class Parameters:
 class GRUMB(nn.Module):
     def __init__(self, input_size, memory_size, output_size):
         super(GRUMB, self).__init__()
+        self.is_static = False #Distinguish between this and static policy
 
         self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
         # #Bias placeholders
@@ -146,6 +145,7 @@ class GRUMB(nn.Module):
         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
         self.agent_sensor = 0.0; self.last_reward = 0.0
 
+
     def reset(self):
         #Adaptive components
         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
@@ -162,6 +162,7 @@ class GRUMB(nn.Module):
         # Compute final output
         output = hidden_act.mm(self.w_hid_out)
 
+
         return output, mem
 
     def forward(self, input):
@@ -177,23 +178,27 @@ class GRUMB(nn.Module):
 class Static_policy():
     def __init__(self, parameters):
         self.paramters = parameters
+        self.is_static = True
 
         self.junction_id = -1
         self.out = np.ones(self.paramters.depth)
         self.agent_sensor = 0
         self.last_reward = 0.0
+        self.new_trial = True
 
     def reset(self):
         self.junction_id = -1
-        self.agent_sensor = -1
+        self.agent_sensor = -1.0
         self.last_reward = 0.0
         self.out = np.ones(self.paramters.depth)
+        self.new_trial = True
 
     def forward(self, input):
-        if input.data.numpy()[0][0] != 0 and input.data.numpy()[0][1] == 0: #Wall and distractors
+        if input.data.numpy()[0][0] != 0 and not self.new_trial: #Wall and distractors
             return
 
-        if input.data.numpy()[0][1] != 0: #First forward propagation (ignore) (Update the self.out for the trial)
+        if self.new_trial: #First forward propagation (ignore) (Update the self.out for the trial)
+            self.new_trial = False
             self.last_reward = input.data.numpy()[0][2]
             self.junction_id = -1
 
@@ -335,6 +340,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
             #Encode last is_another agent and reward value from last time and forward propagate it
             for individual in team:
+                if individual.is_static: individual.new_trial = True
                 x = Variable(torch.Tensor([0, individual.agent_sensor, individual.last_reward]), requires_grad=True); x = x.unsqueeze(0)
                 individual.forward(x)
 
