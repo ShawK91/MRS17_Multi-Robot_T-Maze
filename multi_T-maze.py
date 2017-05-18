@@ -47,20 +47,21 @@ class Tracker(): #Tracker
 class SSNE_param:
     def __init__(self):
         self.num_input = 3
-        self.num_hnodes = 15
+        self.num_hnodes = 20
         self.num_output = 1
 
         self.elite_fraction = 0.03
-        self.crossover_prob = 0
+        self.crossover_prob = 0.1
         self.mutation_prob = 0.9
-        self.weight_magnitude_limit = 10000000
+        self.weight_magnitude_limit = 1000000
         #self.mut_distribution = 0 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
 
 class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 10
+        self.population_size = 100
+        self.load_seed = True
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
@@ -68,7 +69,7 @@ class Parameters:
                            #2 PyTorch GRU-MB
 
         #Task Params
-        self.depth = 5
+        self.depth = 2
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
@@ -80,14 +81,14 @@ class Parameters:
 
 
         #Multi-Agent Params
-        self.static_policy = True #Agent 0 is static policy (num_agents includes this)
-        self.num_agents = 2
+        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
+        self.num_agents = 1
 
         #Reward
-        self.rew_multi_success = 0.0  /(self.num_trials)
+        self.rew_multi_success = 1.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 1.0  /(self.num_trials-1)
+        self.explore_reward = 0.0  /(self.num_trials-1)
 
 
         if self.arch_type == 1: self.arch_type = 'TF_Feedforward'
@@ -104,7 +105,10 @@ class Parameters:
         self.load_seed = False  # Loads a seed population from the save_foldername
         # IF FALSE: Runs Backpropagation, saves it and uses that
 
-        print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents
+        print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents, ' Is_Static: ', self.static_policy
+
+        if not os.path.exists(self.save_foldername):
+            os.makedirs(self.save_foldername)
 
 
 class GRUMB(nn.Module):
@@ -242,7 +246,9 @@ class Agent_Pop:
             self.pop.append(Static_policy(parameters))
             self.champion_ind = 0
         else:
-            for _ in range(self.parameters.population_size):
+            for i in range(self.parameters.population_size):
+                if self.parameters.load_seed:
+                    self.pop.append(self.load(self.parameters.save_foldername + 'champion_' + str(self.agent_id)))
                 self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
             self.champion_ind = None
 
@@ -263,18 +269,15 @@ class Agent_Pop:
             self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
 
 
+    def load(self, filename):
+        return torch.load(self.save_foldername + filename)
+
 class Task_Multi_TMaze: #Mulit-Agent T-Maze
     def __init__(self, parameters):
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
         self.num_input = self.ssne_param.num_input; self.num_hidden = self.ssne_param.num_hnodes; self.num_output = self.ssne_param.num_output
 
         self.ssne = mod.Torch_SSNE(parameters) #nitialize SSNE engine
-
-        # Simulator save folder for checkpoints
-        self.marker = 'PT_ANN'
-        self.save_foldername = self.parameters.save_foldername
-        if not os.path.exists(self.save_foldername):
-            os.makedirs(self.save_foldername)
 
         #####Initiate all agents
         self.all_agents = []
@@ -456,10 +459,16 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         #Save population and HOF
         if gen % 100 == 0:
             for pop_ind, agent_pop in enumerate(self.all_agents):
+                if agent_pop.is_static: continue #Don't Save static populations
+
+                ig_folder = self.parameters.save_foldername + '/Agent_' + str(pop_ind) + '/'
+                if not os.path.exists(ig_folder): os.makedirs(ig_folder)
+
                 for individial_ind, individual in enumerate(agent_pop.pop): #Save population
-                    self.save(individual, self.save_foldername + 'Multi_TMaze_' + str(pop_ind) + '_' + str(individial_ind))
-                #self.save(self.pop[champion_index], self.save_foldername + 'Champion_Simulator') #Save champion
-                np.savetxt(self.save_foldername + '/gen_tag', np.array([gen + 1]), fmt='%.3f', delimiter=',')
+                    self.save(individual, ig_folder + str(individial_ind))
+
+                self.save(agent_pop.pop[champion_team[pop_ind]], self.parameters.save_foldername + 'champion_' + str(pop_ind)) #Save champion
+                np.savetxt(self.parameters.save_foldername + '/gen_tag', np.array([gen + 1]), fmt='%.3f', delimiter=',')
 
         #SSNE Epoch: Selection and Mutation/Crossover step
         for agent_id, agent_pop in enumerate(self.all_agents):
