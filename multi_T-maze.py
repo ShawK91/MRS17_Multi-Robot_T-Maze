@@ -4,12 +4,14 @@ from random import randint
 from torch.autograd import Variable
 import torch.nn as nn, torch
 from torch.nn import Parameter
+import torch.nn.functional as F
 import torch
 import random
 from operator import add
 
-#TODO Evolution diversity
-
+#TODO Evolution diversity (Extinction)
+#TODO Add LSTM
+is_probe= False
 
 class Tracker(): #Tracker
     def __init__(self, parameters):
@@ -60,13 +62,14 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 100
-        self.load_seed = True
+        self.population_size = 10
+        self.load_seed = False
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
-        self.arch_type = 2 #1 TF_FEEDFORWARD
-                           #2 PyTorch GRU-MB
+        self.arch_type = 2 #1 LSTM
+                           #2 GRUMB
+                           #3 FF
 
         #Task Params
         self.depth = 2
@@ -85,30 +88,33 @@ class Parameters:
         self.num_agents = 1
 
         #Reward
-        self.rew_multi_success = 1.0  /(self.num_trials)
+        self.rew_multi_success = 0.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 0.0  /(self.num_trials-1)
+        self.explore_reward = 1.0  /(self.num_trials-1)
 
 
-        if self.arch_type == 1: self.arch_type = 'TF_Feedforward'
-        elif self.arch_type ==2: self.arch_type = 'PyTorch GRU-MB'
-        elif self.arch_type == 3: self.arch_type = 'PyTorch Feedforward'
+        if self.arch_type == 1: self.arch_type = 'LSTM'
+        elif self.arch_type ==2: self.arch_type = 'GRUMB'
+        elif self.arch_type == 3: self.arch_type = 'FF'
         else: sys.exit('Invalid choice of neural architecture')
 
         self.save_foldername = 'R_Multi-Agent_TMaze/'
 
-        # BackProp
-        self.bprop_max_gens = 100
-        self.bprop_train_examples = 1000
-        self.skip_bprop = False
-        self.load_seed = False  # Loads a seed population from the save_foldername
-        # IF FALSE: Runs Backpropagation, saves it and uses that
+        # # BackProp
+        # self.bprop_max_gens = 100
+        # self.bprop_train_examples = 1000
+        # self.skip_bprop = False
+        # self.load_bprop_seed = False  # Loads a seed population from the save_foldername
+        # # IF FALSE: Runs Backpropagation, saves it and uses that
 
         print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents, ' Is_Static: ', self.static_policy
 
         if not os.path.exists(self.save_foldername):
             os.makedirs(self.save_foldername)
+
+        #Overrides
+        if is_probe: self.load_seed = True #Overrides
 
 
 class GRUMB(nn.Module):
@@ -179,6 +185,38 @@ class GRUMB(nn.Module):
         output = out.data.numpy()
         return output
 
+class FF(nn.Module):
+    def __init__(self, input_size, memory_size, output_size):
+        super(FF, self).__init__()
+        self.is_static = False #Distinguish between this and static policy
+
+        self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
+
+        #Block Input
+        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=1)
+
+        #Output weights
+        self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=1)
+
+        #Adaptive components
+        self.agent_sensor = 0.0; self.last_reward = 0.0
+
+
+    def reset(self):
+        #Adaptive components
+        self.agent_sensor = 0.0; self.last_reward = 0.0
+
+    def graph_compute(self, input):
+        return F.sigmoid(input.mm(self.w_inp)).mm(self.w_hid_out)
+
+    def forward(self, input):
+        return self.graph_compute(input)
+
+    def predict(self, input, is_static=False):
+        out = self.forward(input, is_static)
+        output = out.data.numpy()
+        return output
+
 class Static_policy():
     def __init__(self, parameters):
         self.paramters = parameters
@@ -228,11 +266,6 @@ class Static_policy():
 
 
 
-
-
-
-
-
 class Agent_Pop:
     def __init__(self, parameters, i, is_static=False):
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
@@ -247,9 +280,14 @@ class Agent_Pop:
             self.champion_ind = 0
         else:
             for i in range(self.parameters.population_size):
-                if self.parameters.load_seed:
-                    self.pop.append(self.load(self.parameters.save_foldername + 'champion_' + str(self.agent_id)))
-                self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
+                if self.parameters.load_seed and i == 0: #Load seed if option
+                    self.pop.append(self.load('champion_' + str(self.agent_id)))
+
+                #Choose architecture
+                if self.parameters.arch_type == "GRUMB":
+                    self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
+                elif self.parameters.arch_type == "FF":
+                    self.pop.append(FF(self.num_input, self.num_hidden, self.num_output))
             self.champion_ind = None
 
         #Fitness evaluation list for the generation
@@ -270,7 +308,7 @@ class Agent_Pop:
 
 
     def load(self, filename):
-        return torch.load(self.save_foldername + filename)
+        return torch.load(self.parameters.save_foldername + filename)
 
 class Task_Multi_TMaze: #Mulit-Agent T-Maze
     def __init__(self, parameters):
@@ -287,11 +325,20 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             else:
                 self.all_agents.append(Agent_Pop(parameters, agent_id))
 
-        # ###Init population
-        # if self.parameters.load_seed: #Load seed population
-        #     self.load('bprop_bsc')
-        # else: #Run Backprop
-        #     self.run_bprop(self.pop[0])
+        if is_probe: self.run_probe() #Run probe and end the program
+
+
+
+    def run_probe(self):
+        team_ind = [0]*self.parameters.num_agents #Grab all the loaded champions
+
+        set_train_x, set_train_y = self.get_training_maze(self.parameters.num_train_evals)
+        fitnesses = [0] * self.parameters.num_agents
+        for train_x, train_y in zip(set_train_x, set_train_y):  # For all maps in the training set
+            fitnesses = map(add, fitnesses, self.compute_fitness(team_ind, train_x, train_y) / self.parameters.num_train_evals)  # Returns rewards for each member of the team for each individual training map
+        #TODO FINISH PROBE
+
+        sys.exit('PROBE COMPLETED')
 
     def save(self, individual, filename ):
         torch.save(individual, filename)
