@@ -319,6 +319,13 @@ class Torch_SSNE:
         for w_replacee, w_master in zip(W_replacee, W_master):
             w_replacee.data[:] = w_master.data
 
+    def reset_genome(self, gene):
+        W = list(gene.parameters())
+        for tensor in W:
+            dim1 = tensor.size()[0]
+            dim2 = tensor.size()[-1]
+            tensor.data = torch.rand(dim1, dim2)
+
     def epoch(self, pop, fitness_evals):
 
         # Entire epoch is handled with indices; Index rank nets by fitness evaluation (0 is the best after reversing)
@@ -329,6 +336,13 @@ class Torch_SSNE:
         # Selection step
         offsprings = self.selection_tournament(index_rank, num_offsprings=len(index_rank) - self.num_elitists,
                                                tournament_size=3)
+
+        #Extinction step (Resets all the offsprings genes; preserves the elitists)
+        if random.random() < self.ssne_param.extinction_prob: #An extinction event
+            print "Extinction Event Triggered"
+            for i in offsprings:
+                if random.random() < self.ssne_param.extinction_magnituide and not (i in elitist_index):  # Extinction probabilities
+                    self.reset_genome(pop[i])
         # Figure out unselected candidates
         unselects = [];
         new_elitists = []
@@ -352,8 +366,6 @@ class Torch_SSNE:
         for i, j in zip(unselects[0::2], unselects[1::2]):
             off_i = random.choice(new_elitists);
             off_j = random.choice(offsprings)
-            # pop[i] = copy.deepcopy(pop[off_i])
-            # pop[j] = copy.deepcopy(pop[off_j])
             self.copy_individual(master=pop[off_i], replacee=pop[i])
             self.copy_individual(master=pop[off_j], replacee=pop[j])
             self.crossover_inplace(pop[i], pop[j])

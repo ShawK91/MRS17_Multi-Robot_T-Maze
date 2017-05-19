@@ -9,9 +9,10 @@ import torch
 import random
 from operator import add
 
+#TODO Weight initialization Torch
 #TODO Evolution diversity (Extinction)
 #TODO Add LSTM
-is_probe= False
+is_probe= True
 
 class Tracker(): #Tracker
     def __init__(self, parameters):
@@ -55,6 +56,8 @@ class SSNE_param:
         self.elite_fraction = 0.03
         self.crossover_prob = 0.1
         self.mutation_prob = 0.9
+        self.extinction_prob = 0.003 #Probability of extinction event
+        self.extinction_magnituide = 0.9 #Probabilty of extinction for each genome, given an extinction event
         self.weight_magnitude_limit = 1000000
         #self.mut_distribution = 0 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
 
