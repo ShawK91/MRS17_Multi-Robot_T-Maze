@@ -70,7 +70,7 @@ class Parameters:
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
-        self.arch_type = 2 #1 LSTM
+        self.arch_type = 1 #1 LSTM
                            #2 GRUMB
                            #3 FF
 
@@ -79,7 +79,7 @@ class Parameters:
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
-        self.corridor_bound = [1,1]
+        self.corridor_bound = [5,5]
         self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
         self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
