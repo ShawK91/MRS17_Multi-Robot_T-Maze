@@ -75,11 +75,11 @@ class Parameters:
                            #3 FF
 
         #Task Params
-        self.depth = 2
+        self.depth = 4
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
-        self.corridor_bound = [5,5]
+        self.corridor_bound = [1,1]
         self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
         self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
@@ -87,7 +87,7 @@ class Parameters:
 
 
         #Multi-Agent Params
-        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
+        self.static_policy = True #Agent 0 is static policy (num_agents includes this)
         self.num_agents = 1
 
         #Reward
@@ -335,9 +335,13 @@ class Static_policy():
     def __init__(self, parameters):
         self.paramters = parameters
         self.is_static = True
+        self.bank_out = self.init_exploration_start_point()  # Randomly initialize where the static policy starts from and store it as bank starting point for this specific policy
+        self.out = np.zeros(self.paramters.depth) #PLACEHOLDER
+        self.explore_policy = self.binary_add if random.random()<0.5 else self.binary_substract
 
+        #Resettable
         self.junction_id = -1
-        self.out = np.ones(self.paramters.depth)
+        self.out[:] = self.bank_out #Initialize out as the bank initialization point
         self.agent_sensor = 0
         self.last_reward = 0.0
         self.new_trial = True
@@ -346,8 +350,14 @@ class Static_policy():
         self.junction_id = -1
         self.agent_sensor = -1.0
         self.last_reward = 0.0
-        self.out = np.ones(self.paramters.depth)
+        self.out[:] = self.bank_out
         self.new_trial = True
+
+    def init_exploration_start_point(self):
+        out = np.zeros(self.paramters.depth)
+        for i in range(self.paramters.depth):
+            if random.random() < 0.5: out[i] = 1
+        return out
 
     def forward(self, input):
         if input.data.numpy()[0][0] != 0 and not self.new_trial: #Wall and distractors
@@ -360,23 +370,40 @@ class Static_policy():
 
             #Compute output
             if self.last_reward == 1: None #if found reward last time
-            elif np.all(self.out):
-                self.out = np.zeros(self.paramters.depth) #Boundary condition
-            else: #Binary add 1 (explore)
-                carry = 0
-                for j in range(len(self.out)-1,-1,-1):
-                    if carry != 0:
-                        self.out[j] += carry
-                        carry = 0
-                    if j == len(self.out)-1 : self.out[j] += 1
-                    if self.out[j] == 2:
-                        carry = 1
-                        self.out[j] = 0
-                return
+            else: #Explore policy (could be binary add or binary substract)
+                self.explore_policy()
 
         else: #Decision taking points (junctions)
             self.junction_id += 1
             return Variable(torch.Tensor([[self.out[self.junction_id]]]), requires_grad=0)
+
+
+    def binary_add(self):
+        carry = 0
+        for j in range(len(self.out) - 1, -1, -1):
+            if carry != 0:
+                self.out[j] += carry
+                carry = 0
+            if j == len(self.out) - 1: self.out[j] += 1
+            if self.out[j] == 2:
+                carry = 1
+                self.out[j] = 0
+        if carry == 1:
+            self.out = np.zeros(self.paramters.depth)  # Boundary condition
+
+
+    def binary_substract(self):
+        carry = 0
+        for j in range(len(self.out) - 1, -1, -1):
+            if carry != 0:
+                self.out[j] += carry
+                carry = 0
+            if j == len(self.out) - 1: self.out[j] -= 1
+            if self.out[j] == -1:
+                carry = -1
+                self.out[j] = 1
+        if carry == -1:
+            self.out = np.ones(self.paramters.depth)  # Boundary condition
 
 
 class Agent_Pop:
