@@ -65,22 +65,22 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 10
+        self.population_size = 100
         self.load_seed = False
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
         #Determine the nerual archiecture
-        self.arch_type = 1 #1 LSTM
+        self.arch_type = 2 #1 LSTM
                            #2 GRUMB
                            #3 FF
 
         #Task Params
-        self.depth = 4
+        self.depth = 2
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
         self.corridor_bound = [1,1]
-        self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
+        self.num_evals_ccea = 5 #Number of different teams to test the same individual in before assigning a score
         self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
         self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
@@ -88,13 +88,14 @@ class Parameters:
 
         #Multi-Agent Params
         self.static_policy = True #Agent 0 is static policy (num_agents includes this)
-        self.num_agents = 1
+        self.is_static_variable = True #Determines if the static policy is variable
+        self.num_agents = 2
 
         #Reward
-        self.rew_multi_success = 0.0  /(self.num_trials)
+        self.rew_multi_success = 1.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 1.0  /(self.num_trials-1)
+        self.explore_reward = 0.0  /(self.num_trials-1)
 
 
         if self.arch_type == 1: self.arch_type = 'LSTM'
@@ -335,9 +336,13 @@ class Static_policy():
     def __init__(self, parameters):
         self.paramters = parameters
         self.is_static = True
-        self.bank_out = self.init_exploration_start_point()  # Randomly initialize where the static policy starts from and store it as bank starting point for this specific policy
-        self.out = np.zeros(self.paramters.depth) #PLACEHOLDER
-        self.explore_policy = self.binary_add if random.random()<0.5 else self.binary_substract
+        self.out = np.ones(self.paramters.depth)  # PLACEHOLDER
+        if self.paramters.is_static_variable:  # if variable static policy
+            self.bank_out = self.init_exploration_start_point()  # Randomly initialize where the static policy starts from and store it as bank starting point for this specific policy
+            self.explore_policy = self.binary_add if random.random() <0.5 else self.binary_substract
+        else: #Static policy is not variable
+            self.bank_out = np.ones(self.paramters.depth)
+            self.explore_policy = self.binary_add
 
         #Resettable
         self.junction_id = -1
@@ -416,8 +421,8 @@ class Agent_Pop:
         #####CREATE POPULATION
         self.pop = []
         if is_static: #Static policy agent
-            self.pop.append(Static_policy(parameters))
-            self.champion_ind = 0
+            for i in range(self.parameters.population_size):
+                self.pop.append(Static_policy(parameters))
         else:
             for i in range(self.parameters.population_size):
                 if self.parameters.load_seed and i == 0: #Load seed if option
@@ -432,23 +437,17 @@ class Agent_Pop:
                     self.pop.append(LSTM(self.num_input, self.num_hidden, self.num_output))
                 else:
                     sys.exit('Invalid choice of architecture')
-            self.champion_ind = None
+        self.champion_ind = None
 
         #Fitness evaluation list for the generation
         self.fitness_evals = [0.0] * self.parameters.population_size
-        if is_static: #Static policy agent
-            self.selection_pool = [0] * self.parameters.population_size * self.parameters.num_evals_ccea
-        else:
-            self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
+        self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
 
 
     def reset(self):
         #Fitness evaluation list for the generation
         self.fitness_evals = [0.0] * self.parameters.population_size
-        if self.is_static: #Static policy agent
-            self.selection_pool = [0] * self.parameters.population_size * self.parameters.num_evals_ccea
-        else:
-            self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
+        self.selection_pool = [i for i in range(self.parameters.population_size)]*self.parameters.num_evals_ccea
 
 
     def load(self, filename):
@@ -635,8 +634,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         champion_team = []
         #Find the champion idnex and bext performance
         for agent_id, agent_pop in enumerate(self.all_agents):
-            if agent_pop.is_static: tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals)/self.parameters.population_size #Fix best performance
-            else: tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals) #Fix best performance
+            tr_best_gen_fitness[agent_id] = max(agent_pop.fitness_evals) #Fix best performance
             agent_pop.best_index = agent_pop.fitness_evals.index(max(agent_pop.fitness_evals))
             champion_team.append(agent_pop.best_index)
 

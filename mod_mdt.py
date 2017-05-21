@@ -339,7 +339,7 @@ class Torch_SSNE:
 
         #Extinction step (Resets all the offsprings genes; preserves the elitists)
         if random.random() < self.ssne_param.extinction_prob: #An extinction event
-            print "Extinction Event Triggered"
+            print "######################Extinction Event Triggered#######################"
             for i in offsprings:
                 if random.random() < self.ssne_param.extinction_magnituide and not (i in elitist_index):  # Extinction probabilities
                     self.reset_genome(pop[i])
