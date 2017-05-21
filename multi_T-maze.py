@@ -10,8 +10,8 @@ import random
 from operator import add
 
 #TODO Weight initialization Torch
-#TODO Evolution diversity (Extinction)
-#TODO Add LSTM
+#TODO Parameters gradients = False
+#TODO multiple policies
 is_probe= False
 
 class Tracker(): #Tracker
@@ -156,6 +156,9 @@ class LSTM(nn.Module):
         self.h = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
         self.agent_sensor = 0.0; self.last_reward = 0.0
 
+        # Turn grad off for evolutionary algorithm
+        self.turn_grad_off()
+
     def reset(self):
         #Adaptive components
         self.c = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
@@ -184,63 +187,82 @@ class LSTM(nn.Module):
         output = out.data.numpy()
         return output
 
+    def turn_grad_on(self):
+        for param in self.parameters():
+            param.requires_grad = True
+            param.volatile = False
+
+    def turn_grad_off(self):
+        for param in self.parameters():
+            param.requires_grad = False
+            param.volatile = True
 
 
 class GRUMB(nn.Module):
     def __init__(self, input_size, memory_size, output_size):
         super(GRUMB, self).__init__()
-        self.is_static = False #Distinguish between this and static policy
+        self.is_static = False  # Distinguish between this and static policy
 
-        self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
+        self.input_size = input_size;
+        self.memory_size = memory_size;
+        self.output_size = output_size
         # #Bias placeholders
         # self.input_bias = Variable(torch.ones(1, 1), requires_grad=True)
         # self.rec_input_bias = Variable(torch.ones(1, 1), requires_grad=True)
         # self.mem_bias = Variable(torch.ones(1, 1), requires_grad=True)
 
-        #Input gate
-        self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_inpgate = Parameter(torch.rand(output_size, memory_size), requires_grad=1)
-        self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        # Input gate
+        self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+        self.w_rec_inpgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+        self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
 
-        #Block Input
-        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=1)
-        self.w_rec_inp = Parameter(torch.ones(output_size, memory_size), requires_grad=1)
+        # Block Input
+        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=0)
+        self.w_rec_inp = Parameter(torch.ones(output_size, memory_size), requires_grad=0)
 
-        #Read Gate
-        self.w_readgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_readgate = Parameter(torch.rand(output_size, memory_size), requires_grad=1)
-        self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        # Read Gate
+        self.w_readgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+        self.w_rec_readgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+        self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
 
-        #Write Gate
-        self.w_writegate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_writegate = Parameter(torch.rand(output_size, memory_size), requires_grad=1)
-        self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        # Write Gate
+        self.w_writegate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+        self.w_rec_writegate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+        self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
 
-        #Output weights
-        self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=1)
+        # Output weights
+        self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=0)
 
-        #Adaptive components
+        # Adaptive components
         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-        self.agent_sensor = 0.0; self.last_reward = 0.0
+        self.agent_sensor = 0.0;
+        self.last_reward = 0.0
 
+        # Turn grad off for evolutionary algorithm
+        self.turn_grad_off()
 
     def reset(self):
-        #Adaptive components
+        # Adaptive components
         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-        self.agent_sensor = 0.0; self.last_reward = 0.0
+        self.agent_sensor = 0.0;
+        self.last_reward = 0.0
 
     def graph_compute(self, input, mem, rec_output):
         # Compute hidden activation
-        hidden_act = torch.nn.functional.sigmoid(input.mm(self.w_readgate) + rec_output.mm(self.w_rec_readgate) + mem.mm(self.w_mem_readgate)) * mem + torch.nn.functional.sigmoid(input.mm(self.w_inpgate) + mem.mm(self.w_mem_inpgate) + rec_output.mm(self.w_rec_inpgate)) * torch.nn.functional.sigmoid(input.mm(self.w_inp) + rec_output.mm(self.w_rec_inp))
+        hidden_act = torch.nn.functional.sigmoid(
+            input.mm(self.w_readgate) + rec_output.mm(self.w_rec_readgate) + mem.mm(
+                self.w_mem_readgate)) * mem + torch.nn.functional.sigmoid(
+            input.mm(self.w_inpgate) + mem.mm(self.w_mem_inpgate) + rec_output.mm(
+                self.w_rec_inpgate)) * torch.nn.functional.sigmoid(input.mm(self.w_inp) + rec_output.mm(self.w_rec_inp))
 
-        #Update mem
-        mem = mem + torch.nn.functional.sigmoid(input.mm(self.w_writegate) + mem.mm(self.w_mem_writegate) + rec_output.mm(self.w_rec_writegate))
+        # Update mem
+        mem = mem + torch.nn.functional.sigmoid(
+            input.mm(self.w_writegate) + mem.mm(self.w_mem_writegate) + rec_output.mm(self.w_rec_writegate))
 
         # Compute final output
         output = hidden_act.mm(self.w_hid_out)
-
 
         return output, mem
 
@@ -253,6 +275,16 @@ class GRUMB(nn.Module):
         out = self.forward(input, is_static)
         output = out.data.numpy()
         return output
+
+    def turn_grad_on(self):
+        for param in self.parameters():
+            param.requires_grad = True
+            param.volatile = False
+
+    def turn_grad_off(self):
+        for param in self.parameters():
+            param.requires_grad = False
+            param.volatile = True
 
 class FF(nn.Module):
     def __init__(self, input_size, memory_size, output_size):
@@ -270,6 +302,9 @@ class FF(nn.Module):
         #Adaptive components
         self.agent_sensor = 0.0; self.last_reward = 0.0
 
+        # Turn grad off for evolutionary algorithm
+        self.turn_grad_off()
+
 
     def reset(self):
         #Adaptive components
@@ -285,6 +320,16 @@ class FF(nn.Module):
         out = self.forward(input, is_static)
         output = out.data.numpy()
         return output
+
+    def turn_grad_on(self):
+        for param in self.parameters():
+            param.requires_grad = True
+            param.volatile = False
+
+    def turn_grad_off(self):
+        for param in self.parameters():
+            param.requires_grad = False
+            param.volatile = True
 
 class Static_policy():
     def __init__(self, parameters):
