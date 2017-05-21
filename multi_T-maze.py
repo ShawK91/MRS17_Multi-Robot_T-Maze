@@ -12,7 +12,7 @@ from operator import add
 #TODO Weight initialization Torch
 #TODO Evolution diversity (Extinction)
 #TODO Add LSTM
-is_probe= True
+is_probe= False
 
 class Tracker(): #Tracker
     def __init__(self, parameters):
@@ -118,6 +118,72 @@ class Parameters:
 
         #Overrides
         if is_probe: self.load_seed = True #Overrides
+
+
+class LSTM(nn.Module):
+    def __init__(self,input_size, memory_size, output_size):
+        super(LSTM, self).__init__()
+        self.is_static = False #Distinguish between this and static policy
+        self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
+        #self.lstm= nn.LSTM(input_size, memory_size, output_size)
+
+        #LSTM implementation
+        # Input gate
+        self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
+        self.w_rec_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+
+        # Block Input
+        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=1)
+        self.w_rec_inp = Parameter(torch.ones(memory_size, memory_size), requires_grad=1)
+
+        # Forget gate
+        self.w_forgetgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
+        self.w_rec_forgetgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        self.w_mem_forgetgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+
+        # Output gate
+        self.w_outgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
+        self.w_rec_outgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+        self.w_mem_outgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
+
+        #Hidden_to_out
+        self.hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=1)
+
+
+        #Adaptive components
+        self.c = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+        self.h = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+        self.agent_sensor = 0.0; self.last_reward = 0.0
+
+    def reset(self):
+        #Adaptive components
+        self.c = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+        self.h = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+
+        self.agent_sensor = 0.0; self.last_reward = 0.0
+
+    def graph_compute(self, input):
+        inp_gate = F.sigmoid(input.mm(self.w_inpgate) + self.h.mm(self.w_rec_inpgate) + self.c.mm(self.w_mem_inpgate))
+        forget_gate = F.sigmoid(input.mm(self.w_forgetgate) + self.h.mm(self.w_rec_forgetgate) + self.c.mm(self.w_mem_forgetgate))
+        out_gate = F.sigmoid(input.mm(self.w_outgate) + self.h.mm(self.w_rec_outgate) + self.c.mm(self.w_mem_outgate))
+
+        ct_new = F.tanh(input.mm(self.w_inp) + self.h.mm(self.w_rec_inp))
+
+        c_t = inp_gate * ct_new + forget_gate * self.c
+        h_t = out_gate * F.tanh(c_t)
+        return h_t, c_t
+
+    def forward(self, input):
+        self.h, self.c = self.graph_compute(input)
+
+        return self.hid_out.mm(self.h)
+
+    def predict(self, input, is_static=False):
+        out = self.forward(input, is_static)
+        output = out.data.numpy()
+        return output
+
 
 
 class GRUMB(nn.Module):
@@ -268,7 +334,6 @@ class Static_policy():
             return Variable(torch.Tensor([[self.out[self.junction_id]]]), requires_grad=0)
 
 
-
 class Agent_Pop:
     def __init__(self, parameters, i, is_static=False):
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
@@ -291,6 +356,10 @@ class Agent_Pop:
                     self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
                 elif self.parameters.arch_type == "FF":
                     self.pop.append(FF(self.num_input, self.num_hidden, self.num_output))
+                elif self.parameters.arch_type == "LSTM":
+                    self.pop.append(LSTM(self.num_input, self.num_hidden, self.num_output))
+                else:
+                    sys.exit('Invalid choice of architecture')
             self.champion_ind = None
 
         #Fitness evaluation list for the generation
