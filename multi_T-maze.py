@@ -29,7 +29,7 @@ class Tracker(): #Tracker
             self.fitnesses.pop(0)
         self.avg_fitness = sum(self.fitnesses)/len(self.fitnesses)
         if generation % 10 == 0: #Save to csv file
-            filename = self.foldername + '/epoch_best_' + self.file_save
+            filename = self.foldername + '/champ_train' + self.file_save
             self.tr_avg_fit.append(np.array([generation, self.avg_fitness]))
             np.savetxt(filename, np.array(self.tr_avg_fit), fmt='%.3f', delimiter=',')
 
@@ -39,7 +39,7 @@ class Tracker(): #Tracker
             self.hof_fitnesses.pop(0)
         self.hof_avg_fitness = sum(self.hof_fitnesses)/len(self.hof_fitnesses)
         if generation % 10 == 0: #Save to csv file
-            filename = self.foldername + '/champion_' + self.file_save
+            filename = self.foldername + '/champ_real' + self.file_save
             self.hof_tr_avg_fit.append(np.array([generation, self.hof_avg_fitness]))
             np.savetxt(filename, np.array(self.hof_tr_avg_fit), fmt='%.3f', delimiter=',')
 
@@ -65,7 +65,7 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 100
+        self.population_size = 25
         self.load_seed = False
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
@@ -79,23 +79,25 @@ class Parameters:
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
-        self.corridor_bound = [1,1]
-        self.num_evals_ccea = 5 #Number of different teams to test the same individual in before assigning a score
-        self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
+        self.corridor_bound = [2,2]
+        self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
+        self.num_train_evals = 5 #Number of different maps to run each individual before getting a fitness
 
         self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
 
 
         #Multi-Agent Params
-        self.static_policy = True #Agent 0 is static policy (num_agents includes this)
-        self.is_static_variable = True #Determines if the static policy is variable
-        self.num_agents = 2
+        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
+        self.is_static_variable = False #Determines if the static policy is variable
+        self.num_agents = 1
 
-        #Reward
+        #Reward (Real fitness will always measure multi_success only)
         self.rew_multi_success = 1.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 0.0  /(self.num_trials-1)
+        self.explore_reward = 0.1  /(self.num_trials-1)
+        self.pure_exploration = False
+
 
 
         if self.arch_type == 1: self.arch_type = 'LSTM'
@@ -112,13 +114,14 @@ class Parameters:
         # self.load_bprop_seed = False  # Loads a seed population from the save_foldername
         # # IF FALSE: Runs Backpropagation, saves it and uses that
 
-        print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents, ' Is_Static: ', self.static_policy
+        print 'Depth:', self.depth, '  Num_Trials:', self.num_trials, '  Num_Agents:', self.num_agents, ' Is_Static:', self.static_policy, ' Exploration only:', self.pure_exploration
 
         if not os.path.exists(self.save_foldername):
             os.makedirs(self.save_foldername)
 
         #Overrides
         if is_probe: self.load_seed = True #Overrides
+
 
 
 class LSTM(nn.Module):
@@ -528,7 +531,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
 
         all_path_simulation = [[[],[]] for _ in range (self.parameters.num_agents)] #Store all path taken by each agent through the entrie simulation (all trials))
-        fitnesses = np.zeros(len(team)) #Stores the actual fitnesses
+        training_fitnesses = np.zeros(len(team)) #Stores the training fitnesses
+        real_fitness = 0.0  # Stores the actual fitnesses
         for trial in range(self.parameters.num_trials): #For each trial
 
             #Encode last is_another agent and reward value from last time and forward propagate it
@@ -558,7 +562,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             for i, individual in enumerate(team):
                 individual.last_reward = 0.0;  individual.agent_sensor = 0.0 #Reset last reward value and agent sensor
                 if path_out[i] == y:
-                    fitnesses[i] += self.parameters.rew_single_success #Single agent reward
+                    training_fitnesses[i] += self.parameters.rew_single_success #Single agent reward
                     individual.last_reward = 1.0
                     all_path_simulation[i][1].append(1)
                 else:
@@ -578,10 +582,11 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             #Give reward for multi_agent_success
             if is_multi_success:
                 for i in range(len(team)):
-                    fitnesses[i] += self.parameters.rew_multi_success
+                    training_fitnesses[i] += self.parameters.rew_multi_success
+                    real_fitness += 1.0 /(self.parameters.num_trials)
             if is_same_path:
                 for i in range(len(team)):
-                    fitnesses[i] += self.parameters.rew_same_path
+                    training_fitnesses[i] += self.parameters.rew_same_path
                     team[i].agent_sensor = 1.0
 
 
@@ -592,13 +597,14 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                 is_explore = True
                 for history in range(self.parameters.num_trials/3):
                     check_index = path_id - history -1
-                    if check_index < 0 or all_path_simulation[individual_id][1][check_index] == 1: break
+                    if check_index < 0: break; #Check index before step 1
+                    if not self.parameters.pure_exploration and all_path_simulation[individual_id][1][check_index] == 1: break #Check index led to observation of reward (reset exploration) If pure exploration is turned on, this is irrelevant
                     if all_path_simulation[individual_id][0][check_index] == single_path:
                         is_explore = False
                         break
-                if is_explore: fitnesses[individual_id] += self.parameters.explore_reward
+                if is_explore: training_fitnesses[individual_id] += self.parameters.explore_reward
 
-        return fitnesses
+        return training_fitnesses, real_fitness
 
     def evolve(self, gen):
         tr_best_gen_fitness = [0]*parameters.num_agents
@@ -623,7 +629,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             # SIMULATION AND TRACK REWARD
             fitnesses = [0]*self.parameters.num_agents
             for train_x, train_y in zip(set_train_x, set_train_y): #For all maps in the training set
-                fitnesses = map(add, fitnesses, self.compute_fitness(team_ind, train_x, train_y)/self.parameters.num_train_evals)  # Returns rewards for each member of the team for each individual training map
+                train_fitnesses, _ = self.compute_fitness(team_ind, train_x, train_y)
+                fitnesses = map(add, fitnesses, train_fitnesses/self.parameters.num_train_evals )  # Returns rewards for each member of the team for each individual training map
 
 
             # ENCODE fitness back to each agent populations
@@ -640,9 +647,12 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
         #Run simulation of champion team
         set_test_x, set_test_y = self.get_training_maze(self.parameters.num_train_evals*2)
-        champion_fitness = [0] * self.parameters.num_agents
+        champ_train_fitnesses = [0] * self.parameters.num_agents
+        champ_real_fitness = 0.0
         for test_x, test_y in zip(set_test_x, set_test_y):
-            champion_fitness = map(add, champion_fitness, self.compute_fitness(champion_team, test_x, test_y)/len(set_test_x))
+            train_fitnesses, real_fitness = self.compute_fitness(champion_team, test_x, test_y)
+            champ_real_fitness += real_fitness/len(set_test_x)
+            champ_train_fitnesses = map(add, train_fitnesses/len(set_test_x), champ_train_fitnesses)  # Returns rewards for each member of the team for each individua
 
 
         #Save population and HOF
@@ -664,7 +674,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             if not agent_pop.is_static:
                 self.ssne.epoch(agent_pop.pop, agent_pop.fitness_evals)
 
-        return tr_best_gen_fitness, champion_fitness
+        return tr_best_gen_fitness, champ_train_fitnesses, champ_real_fitness
 
     def get_training_maze(self, num_examples):
         set_x = []; set_y = []
@@ -696,10 +706,10 @@ if __name__ == "__main__":
 
     sim_task = Task_Multi_TMaze(parameters)
     for gen in range(1, parameters.total_gens):
-        gen_best_fitness, champion_fitness = sim_task.evolve(gen)
-        print 'Generation:', gen, ' Epoch_best_reward:', [i*parameters.num_trials for i in gen_best_fitness], '/', parameters.num_trials , ' Champion_reward:', [i*parameters.num_trials for i in champion_fitness], '/', parameters.num_trials#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
-        tracker.add_fitness(sum(gen_best_fitness)/parameters.num_agents, gen)  # Add average global performance to tracker
-        tracker.add_hof_fitness(sum(champion_fitness)/parameters.num_agents, gen)  # Add best global performance to tracker
+        gen_best_fitnesses, champ_train_fitnesses, champ_real_fitness = sim_task.evolve(gen)
+        print 'Gen:', gen, ' #Trials:', parameters.num_trials, ' Epoch_best:', ['%.2f' % i for i in gen_best_fitnesses], ' Champ_train:', ['%.2f' % i for i in champ_train_fitnesses], ' Champ_real:', '%.2f'%champ_real_fitness#, ' Valid Score:', "%0.2f" % valid_score, '  Cumul_Valid_Score:', "%0.2f" % tracker.hof_avg_fitness
+        tracker.add_fitness(sum(champ_train_fitnesses)/parameters.num_agents, gen)  # Add average global performance to tracker
+        tracker.add_hof_fitness(champ_real_fitness, gen)  # Add best global performance to tracker
 
 
 
