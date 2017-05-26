@@ -10,8 +10,10 @@ import random
 from operator import add
 
 #TODO Weight initialization Torch
-#TODO Parameters gradients = False
-#TODO multiple policies
+#TODO Compute fitness function optimize
+
+
+
 is_probe= False
 
 class Tracker(): #Tracker
@@ -56,7 +58,7 @@ class SSNE_param:
         self.elite_fraction = 0.03
         self.crossover_prob = 0.1
         self.mutation_prob = 0.9
-        self.extinction_prob = 0.003 #Probability of extinction event
+        self.extinction_prob = 0.004 #Probability of extinction event
         self.extinction_magnituide = 0.9 #Probabilty of extinction for each genome, given an extinction event
         self.weight_magnitude_limit = 1000000
         #self.mut_distribution = 0 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
@@ -65,7 +67,7 @@ class Parameters:
     def __init__(self):
 
         #SSNE stuff
-        self.population_size = 25
+        self.population_size = 100
         self.load_seed = False
         self.ssne_param = SSNE_param()
         self.total_gens = 100000
@@ -79,27 +81,28 @@ class Parameters:
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
-        self.corridor_bound = [2,2]
+        self.corridor_bound = [1,1]
         self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
-        self.num_train_evals = 5 #Number of different maps to run each individual before getting a fitness
+        self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
         self.num_trials = pow(2, self.depth) * 3 #One trial is the robot going to a goal location. One evaluation consistis to multiple trials
 
 
         #Multi-Agent Params
-        self.static_policy = False #Agent 0 is static policy (num_agents includes this)
+        self.static_policy = True #Agent 0 is static policy (num_agents includes this)
         self.is_static_variable = False #Determines if the static policy is variable
-        self.num_agents = 1
+        self.num_agents = 2
 
         #Reward (Real fitness will always measure multi_success only)
         self.rew_multi_success = 1.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
         self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 0.1  /(self.num_trials-1)
+        self.explore_reward = 0.0  /(self.num_trials-1)
         self.pure_exploration = False
 
 
 
+        self.output_activation = None
         if self.arch_type == 1: self.arch_type = 'LSTM'
         elif self.arch_type ==2: self.arch_type = 'GRUMB'
         elif self.arch_type == 3: self.arch_type = 'FF'
@@ -201,94 +204,94 @@ class LSTM(nn.Module):
             param.requires_grad = False
             param.volatile = True
 
-
-class GRUMB(nn.Module):
-    def __init__(self, input_size, memory_size, output_size):
-        super(GRUMB, self).__init__()
-        self.is_static = False  # Distinguish between this and static policy
-
-        self.input_size = input_size;
-        self.memory_size = memory_size;
-        self.output_size = output_size
-        # #Bias placeholders
-        # self.input_bias = Variable(torch.ones(1, 1), requires_grad=True)
-        # self.rec_input_bias = Variable(torch.ones(1, 1), requires_grad=True)
-        # self.mem_bias = Variable(torch.ones(1, 1), requires_grad=True)
-
-        # Input gate
-        self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-        self.w_rec_inpgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-        self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-
-        # Block Input
-        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=0)
-        self.w_rec_inp = Parameter(torch.ones(output_size, memory_size), requires_grad=0)
-
-        # Read Gate
-        self.w_readgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-        self.w_rec_readgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-        self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-
-        # Write Gate
-        self.w_writegate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-        self.w_rec_writegate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-        self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-
-        # Output weights
-        self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=0)
-
-        # Adaptive components
-        self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-        self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-        self.agent_sensor = 0.0;
-        self.last_reward = 0.0
-
-        # Turn grad off for evolutionary algorithm
-        self.turn_grad_off()
-
-    def reset(self):
-        # Adaptive components
-        self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-        self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-        self.agent_sensor = 0.0;
-        self.last_reward = 0.0
-
-    def graph_compute(self, input, mem, rec_output):
-        # Compute hidden activation
-        hidden_act = torch.nn.functional.sigmoid(
-            input.mm(self.w_readgate) + rec_output.mm(self.w_rec_readgate) + mem.mm(
-                self.w_mem_readgate)) * mem + torch.nn.functional.sigmoid(
-            input.mm(self.w_inpgate) + mem.mm(self.w_mem_inpgate) + rec_output.mm(
-                self.w_rec_inpgate)) * torch.nn.functional.sigmoid(input.mm(self.w_inp) + rec_output.mm(self.w_rec_inp))
-
-        # Update mem
-        mem = mem + torch.nn.functional.sigmoid(
-            input.mm(self.w_writegate) + mem.mm(self.w_mem_writegate) + rec_output.mm(self.w_rec_writegate))
-
-        # Compute final output
-        output = hidden_act.mm(self.w_hid_out)
-
-        return output, mem
-
-    def forward(self, input):
-        self.out, self.mem = self.graph_compute(input, self.mem, self.out)
-
-        return self.out
-
-    def predict(self, input, is_static=False):
-        out = self.forward(input, is_static)
-        output = out.data.numpy()
-        return output
-
-    def turn_grad_on(self):
-        for param in self.parameters():
-            param.requires_grad = True
-            param.volatile = False
-
-    def turn_grad_off(self):
-        for param in self.parameters():
-            param.requires_grad = False
-            param.volatile = True
+#
+# class GRUMB(nn.Module):
+#     def __init__(self, input_size, memory_size, output_size):
+#         super(GRUMB, self).__init__()
+#         self.is_static = False  # Distinguish between this and static policy
+#
+#         self.input_size = input_size;
+#         self.memory_size = memory_size;
+#         self.output_size = output_size
+#         # #Bias placeholders
+#         # self.input_bias = Variable(torch.ones(1, 1), requires_grad=True)
+#         # self.rec_input_bias = Variable(torch.ones(1, 1), requires_grad=True)
+#         # self.mem_bias = Variable(torch.ones(1, 1), requires_grad=True)
+#
+#         # Input gate
+#         self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+#         self.w_rec_inpgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+#         self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
+#
+#         # Block Input
+#         self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=0)
+#         self.w_rec_inp = Parameter(torch.ones(output_size, memory_size), requires_grad=0)
+#
+#         # Read Gate
+#         self.w_readgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+#         self.w_rec_readgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+#         self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
+#
+#         # Write Gate
+#         self.w_writegate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
+#         self.w_rec_writegate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
+#         self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
+#
+#         # Output weights
+#         self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=0)
+#
+#         # Adaptive components
+#         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+#         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
+#         self.agent_sensor = 0.0;
+#         self.last_reward = 0.0
+#
+#         # Turn grad off for evolutionary algorithm
+#         self.turn_grad_off()
+#
+#     def reset(self):
+#         # Adaptive components
+#         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
+#         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
+#         self.agent_sensor = 0.0;
+#         self.last_reward = 0.0
+#
+#     def graph_compute(self, input, mem, rec_output):
+#         # Compute hidden activation
+#         hidden_act = torch.nn.functional.sigmoid(
+#             input.mm(self.w_readgate) + rec_output.mm(self.w_rec_readgate) + mem.mm(
+#                 self.w_mem_readgate)) * mem + torch.nn.functional.sigmoid(
+#             input.mm(self.w_inpgate) + mem.mm(self.w_mem_inpgate) + rec_output.mm(
+#                 self.w_rec_inpgate)) * torch.nn.functional.sigmoid(input.mm(self.w_inp) + rec_output.mm(self.w_rec_inp))
+#
+#         # Update mem
+#         mem = mem + torch.nn.functional.sigmoid(
+#             input.mm(self.w_writegate) + mem.mm(self.w_mem_writegate) + rec_output.mm(self.w_rec_writegate))
+#
+#         # Compute final output
+#         output = hidden_act.mm(self.w_hid_out)
+#
+#         return output, mem
+#
+#     def forward(self, input):
+#         self.out, self.mem = self.graph_compute(input, self.mem, self.out)
+#
+#         return self.out
+#
+#     def predict(self, input, is_static=False):
+#         out = self.forward(input, is_static)
+#         output = out.data.numpy()
+#         return output
+#
+#     def turn_grad_on(self):
+#         for param in self.parameters():
+#             param.requires_grad = True
+#             param.volatile = False
+#
+#     def turn_grad_off(self):
+#         for param in self.parameters():
+#             param.requires_grad = False
+#             param.volatile = True
 
 class FF(nn.Module):
     def __init__(self, input_size, memory_size, output_size):
@@ -337,7 +340,7 @@ class FF(nn.Module):
 
 class Static_policy():
     def __init__(self, parameters):
-        self.paramters = parameters
+        self.paramters = parameters; self.fast_net = self
         self.is_static = True
         self.out = np.ones(self.paramters.depth)  # PLACEHOLDER
         if self.paramters.is_static_variable:  # if variable static policy
@@ -368,12 +371,12 @@ class Static_policy():
         return out
 
     def forward(self, input):
-        if input.data.numpy()[0][0] != 0 and not self.new_trial: #Wall and distractors
+        if input[0] != 0 and not self.new_trial: #Wall and distractors
             return
 
         if self.new_trial: #First forward propagation (ignore) (Update the self.out for the trial)
             self.new_trial = False
-            self.last_reward = input.data.numpy()[0][2]
+            self.last_reward = input[2]
             self.junction_id = -1
 
             #Compute output
@@ -383,7 +386,8 @@ class Static_policy():
 
         else: #Decision taking points (junctions)
             self.junction_id += 1
-            return Variable(torch.Tensor([[self.out[self.junction_id]]]), requires_grad=0)
+            return [[self.out[self.junction_id]]]
+            #return Variable(torch.Tensor([[self.out[self.junction_id]]]), requires_grad=0)
 
 
     def binary_add(self):
@@ -413,7 +417,6 @@ class Static_policy():
         if carry == -1:
             self.out = np.ones(self.paramters.depth)  # Boundary condition
 
-
 class Agent_Pop:
     def __init__(self, parameters, i, is_static=False):
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
@@ -433,7 +436,7 @@ class Agent_Pop:
 
                 #Choose architecture
                 if self.parameters.arch_type == "GRUMB":
-                    self.pop.append(GRUMB(self.num_input, self.num_hidden, self.num_output))
+                    self.pop.append(mod.PT_GRUMB(self.num_input, self.num_hidden, self.num_output, output_activation=self.parameters.output_activation))
                 elif self.parameters.arch_type == "FF":
                     self.pop.append(FF(self.num_input, self.num_hidden, self.num_output))
                 elif self.parameters.arch_type == "LSTM":
@@ -461,7 +464,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
         self.num_input = self.ssne_param.num_input; self.num_hidden = self.ssne_param.num_hnodes; self.num_output = self.ssne_param.num_output
 
-        self.ssne = mod.Torch_SSNE(parameters) #nitialize SSNE engine
+        self.ssne = mod.Fast_SSNE(parameters) #nitialize SSNE engine
 
         #####Initiate all agents
         self.all_agents = []
@@ -523,11 +526,12 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
     def compute_fitness(self, team_ind, train_x, train_y):
 
+        team_last_rewards=[0]*len(team_ind); team_last_is_agents = [0] * len(team_ind) #Team last reward and is same path last agent for last trial
         team = [] #Grab reference to the individual agents themeselves for ease of use from team_index
         #Reset memory and out for all agents
         for i, agent_index  in enumerate(team_ind):
             team.append(self.all_agents[i].pop[agent_index])
-            team[-1].reset()
+            team[-1].fast_net.reset()
 
 
         all_path_simulation = [[[],[]] for _ in range (self.parameters.num_agents)] #Store all path taken by each agent through the entrie simulation (all trials))
@@ -536,10 +540,13 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         for trial in range(self.parameters.num_trials): #For each trial
 
             #Encode last is_another agent and reward value from last time and forward propagate it
-            for individual in team:
-                if individual.is_static: individual.new_trial = True
-                x = Variable(torch.Tensor([0, individual.agent_sensor, individual.last_reward]), requires_grad=True); x = x.unsqueeze(0)
-                individual.forward(x)
+            for individual, last_reward, is_agent in zip(team, team_last_rewards, team_last_is_agents):
+                try:
+                    if individual.is_static: individual.new_trial = True
+                except: True
+                x = [0,  is_agent, last_reward]
+                #x = Variable(torch.Tensor([0,  is_agent, last_reward]), requires_grad=True); x = x.unsqueeze(0)
+                individual.fast_net.forward(x)
 
             #Reset path out that collects path out for each individual for each trial
             path_out = [[] for _ in range(self.parameters.num_agents)]
@@ -547,10 +554,11 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             #Run through the maze and collect path chosen by each individual
             for i, individual in enumerate(team):
                 for step in train_x:
-                    x = Variable(torch.Tensor([step, 0, 0]), requires_grad=True); x = x.unsqueeze(0)
-                    out = individual.forward(x)
+                    x = [step, 0, 0]
+                    #x = Variable(torch.Tensor([step, 0, 0]), requires_grad=True); x = x.unsqueeze(0)
+                    out = individual.fast_net.forward(x)
                     if step == 0: #For each junction
-                        net_out = out.data.numpy()[0][0]
+                        net_out = out[0][0]
                         if net_out <= 0: path_out[i].append(-1)
                         else: path_out[i].append(1)
                 all_path_simulation[i][0].append(path_out[i])
@@ -560,10 +568,10 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             #Reset reward and is_other agent, and also single rewards
             is_multi_success = True #Did all agents converge at reward?
             for i, individual in enumerate(team):
-                individual.last_reward = 0.0;  individual.agent_sensor = 0.0 #Reset last reward value and agent sensor
+                team_last_rewards[i] = 0.0;  team_last_is_agents[i] = 0.0 #Reset last reward value and agent sensor
                 if path_out[i] == y:
                     training_fitnesses[i] += self.parameters.rew_single_success #Single agent reward
-                    individual.last_reward = 1.0
+                    team_last_rewards[i] = 1.0
                     all_path_simulation[i][1].append(1)
                 else:
                     is_multi_success = False
@@ -583,11 +591,11 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             if is_multi_success:
                 for i in range(len(team)):
                     training_fitnesses[i] += self.parameters.rew_multi_success
-                    real_fitness += 1.0 /(self.parameters.num_trials)
+                real_fitness += 1.0 /(self.parameters.num_trials)
             if is_same_path:
                 for i in range(len(team)):
                     training_fitnesses[i] += self.parameters.rew_same_path
-                    team[i].agent_sensor = 1.0
+                    team_last_is_agents[i] = 1.0
 
 
         #Reward based on exploration
@@ -674,6 +682,9 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             if not agent_pop.is_static:
                 self.ssne.epoch(agent_pop.pop, agent_pop.fitness_evals)
 
+        #print self.all_agents[0].pop[champion_team[0]].fast_net.w_inp
+        test = np.array(self.all_agents[0].fitness_evals)
+        #print np.min(test), 'Max: ', np.max(test), 'Avg: ', np.mean(test), 'STD: ', np.std(test)
         return tr_best_gen_fitness, champ_train_fitnesses, champ_real_fitness
 
     def get_training_maze(self, num_examples):
