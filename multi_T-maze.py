@@ -55,33 +55,35 @@ class SSNE_param:
         self.num_hnodes = 20
         self.num_output = 1
 
-        self.elite_fraction = 0.03
+        self.elite_fraction = 0.05
         self.crossover_prob = 0.1
         self.mutation_prob = 0.9
         self.extinction_prob = 0.004 #Probability of extinction event
         self.extinction_magnituide = 0.9 #Probabilty of extinction for each genome, given an extinction event
         self.weight_magnitude_limit = 1000000
-        #self.mut_distribution = 0 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
+        self.mut_distribution = 3 #1-Gaussian, 2-Laplace, 3-Uniform, ELSE-all 1s
 
 class Parameters:
     def __init__(self):
 
         #SSNE stuff
+        self.spread_exp = False
         self.population_size = 100
         self.load_seed = False
         self.ssne_param = SSNE_param()
-        self.total_gens = 100000
+        self.total_gens = 10000
         #Determine the nerual archiecture
-        self.arch_type = 2 #1 LSTM
+        self.arch_type = 4 #1 LSTM
                            #2 GRUMB
                            #3 FF
+                           # QUASI_GECCO
 
         #Task Params
-        self.depth = 2
+        self.depth = 3
         self.is_dynamic_depth = False #Makes the task seq len dynamic
         self.dynamic_depth_limit = [1,10]
 
-        self.corridor_bound = [1,1]
+        self.corridor_bound = [2,2]
         self.num_evals_ccea = 1 #Number of different teams to test the same individual in before assigning a score
         self.num_train_evals = 10 #Number of different maps to run each individual before getting a fitness
 
@@ -96,16 +98,17 @@ class Parameters:
         #Reward (Real fitness will always measure multi_success only)
         self.rew_multi_success = 1.0  /(self.num_trials)
         self.rew_single_success = 0.0  /(self.num_trials)
-        self.rew_same_path = 0.0  /(self.num_trials)
-        self.explore_reward = 0.0  /(self.num_trials-1)
-        self.pure_exploration = False
+        self.rew_same_path = 0.1  /(self.num_trials)
+        self.explore_reward = 0.05  /(self.num_trials-1)
+        self.pure_exploration = 0
 
 
 
-        self.output_activation = None
+        self.output_activation = 'tanh'
         if self.arch_type == 1: self.arch_type = 'LSTM'
         elif self.arch_type ==2: self.arch_type = 'GRUMB'
         elif self.arch_type == 3: self.arch_type = 'FF'
+        elif self.arch_type == 4: self.arch_type = 'QUASI_GRUMB'
         else: sys.exit('Invalid choice of neural architecture')
 
         self.save_foldername = 'R_Multi-Agent_TMaze/'
@@ -124,219 +127,6 @@ class Parameters:
 
         #Overrides
         if is_probe: self.load_seed = True #Overrides
-
-
-
-class LSTM(nn.Module):
-    def __init__(self,input_size, memory_size, output_size):
-        super(LSTM, self).__init__()
-        self.is_static = False #Distinguish between this and static policy
-        self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
-        #self.lstm= nn.LSTM(input_size, memory_size, output_size)
-
-        #LSTM implementation
-        # Input gate
-        self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-        self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-
-        # Block Input
-        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=1)
-        self.w_rec_inp = Parameter(torch.ones(memory_size, memory_size), requires_grad=1)
-
-        # Forget gate
-        self.w_forgetgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_forgetgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-        self.w_mem_forgetgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-
-        # Output gate
-        self.w_outgate = Parameter(torch.rand(input_size, memory_size), requires_grad=1)
-        self.w_rec_outgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-        self.w_mem_outgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-
-        #Hidden_to_out
-        self.hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=1)
-
-
-        #Adaptive components
-        self.c = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-        self.h = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-        self.agent_sensor = 0.0; self.last_reward = 0.0
-
-        # Turn grad off for evolutionary algorithm
-        self.turn_grad_off()
-
-    def reset(self):
-        #Adaptive components
-        self.c = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-        self.h = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-
-        self.agent_sensor = 0.0; self.last_reward = 0.0
-
-    def graph_compute(self, input):
-        inp_gate = F.sigmoid(input.mm(self.w_inpgate) + self.h.mm(self.w_rec_inpgate) + self.c.mm(self.w_mem_inpgate))
-        forget_gate = F.sigmoid(input.mm(self.w_forgetgate) + self.h.mm(self.w_rec_forgetgate) + self.c.mm(self.w_mem_forgetgate))
-        out_gate = F.sigmoid(input.mm(self.w_outgate) + self.h.mm(self.w_rec_outgate) + self.c.mm(self.w_mem_outgate))
-
-        ct_new = F.tanh(input.mm(self.w_inp) + self.h.mm(self.w_rec_inp))
-
-        c_t = inp_gate * ct_new + forget_gate * self.c
-        h_t = out_gate * F.tanh(c_t)
-        return h_t, c_t
-
-    def forward(self, input):
-        self.h, self.c = self.graph_compute(input)
-
-        return self.hid_out.mm(self.h)
-
-    def predict(self, input, is_static=False):
-        out = self.forward(input, is_static)
-        output = out.data.numpy()
-        return output
-
-    def turn_grad_on(self):
-        for param in self.parameters():
-            param.requires_grad = True
-            param.volatile = False
-
-    def turn_grad_off(self):
-        for param in self.parameters():
-            param.requires_grad = False
-            param.volatile = True
-
-#
-# class GRUMB(nn.Module):
-#     def __init__(self, input_size, memory_size, output_size):
-#         super(GRUMB, self).__init__()
-#         self.is_static = False  # Distinguish between this and static policy
-#
-#         self.input_size = input_size;
-#         self.memory_size = memory_size;
-#         self.output_size = output_size
-#         # #Bias placeholders
-#         # self.input_bias = Variable(torch.ones(1, 1), requires_grad=True)
-#         # self.rec_input_bias = Variable(torch.ones(1, 1), requires_grad=True)
-#         # self.mem_bias = Variable(torch.ones(1, 1), requires_grad=True)
-#
-#         # Input gate
-#         self.w_inpgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-#         self.w_rec_inpgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-#         self.w_mem_inpgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-#
-#         # Block Input
-#         self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=0)
-#         self.w_rec_inp = Parameter(torch.ones(output_size, memory_size), requires_grad=0)
-#
-#         # Read Gate
-#         self.w_readgate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-#         self.w_rec_readgate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-#         self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-#
-#         # Write Gate
-#         self.w_writegate = Parameter(torch.rand(input_size, memory_size), requires_grad=0)
-#         self.w_rec_writegate = Parameter(torch.rand(output_size, memory_size), requires_grad=0)
-#         self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=0)
-#
-#         # Output weights
-#         self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=0)
-#
-#         # Adaptive components
-#         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-#         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-#         self.agent_sensor = 0.0;
-#         self.last_reward = 0.0
-#
-#         # Turn grad off for evolutionary algorithm
-#         self.turn_grad_off()
-#
-#     def reset(self):
-#         # Adaptive components
-#         self.mem = Variable(torch.zeros(1, self.memory_size), requires_grad=0)
-#         self.out = Variable(torch.zeros(1, self.output_size), requires_grad=0)
-#         self.agent_sensor = 0.0;
-#         self.last_reward = 0.0
-#
-#     def graph_compute(self, input, mem, rec_output):
-#         # Compute hidden activation
-#         hidden_act = torch.nn.functional.sigmoid(
-#             input.mm(self.w_readgate) + rec_output.mm(self.w_rec_readgate) + mem.mm(
-#                 self.w_mem_readgate)) * mem + torch.nn.functional.sigmoid(
-#             input.mm(self.w_inpgate) + mem.mm(self.w_mem_inpgate) + rec_output.mm(
-#                 self.w_rec_inpgate)) * torch.nn.functional.sigmoid(input.mm(self.w_inp) + rec_output.mm(self.w_rec_inp))
-#
-#         # Update mem
-#         mem = mem + torch.nn.functional.sigmoid(
-#             input.mm(self.w_writegate) + mem.mm(self.w_mem_writegate) + rec_output.mm(self.w_rec_writegate))
-#
-#         # Compute final output
-#         output = hidden_act.mm(self.w_hid_out)
-#
-#         return output, mem
-#
-#     def forward(self, input):
-#         self.out, self.mem = self.graph_compute(input, self.mem, self.out)
-#
-#         return self.out
-#
-#     def predict(self, input, is_static=False):
-#         out = self.forward(input, is_static)
-#         output = out.data.numpy()
-#         return output
-#
-#     def turn_grad_on(self):
-#         for param in self.parameters():
-#             param.requires_grad = True
-#             param.volatile = False
-#
-#     def turn_grad_off(self):
-#         for param in self.parameters():
-#             param.requires_grad = False
-#             param.volatile = True
-
-class FF(nn.Module):
-    def __init__(self, input_size, memory_size, output_size):
-        super(FF, self).__init__()
-        self.is_static = False #Distinguish between this and static policy
-
-        self.input_size = input_size; self.memory_size = memory_size; self.output_size = output_size
-
-        #Block Input
-        self.w_inp = Parameter(torch.ones(input_size, memory_size), requires_grad=1)
-
-        #Output weights
-        self.w_hid_out = Parameter(torch.rand(memory_size, output_size), requires_grad=1)
-
-        #Adaptive components
-        self.agent_sensor = 0.0; self.last_reward = 0.0
-
-        # Turn grad off for evolutionary algorithm
-        self.turn_grad_off()
-
-
-    def reset(self):
-        #Adaptive components
-        self.agent_sensor = 0.0; self.last_reward = 0.0
-
-    def graph_compute(self, input):
-        return F.sigmoid(input.mm(self.w_inp)).mm(self.w_hid_out)
-
-    def forward(self, input):
-        return self.graph_compute(input)
-
-    def predict(self, input, is_static=False):
-        out = self.forward(input, is_static)
-        output = out.data.numpy()
-        return output
-
-    def turn_grad_on(self):
-        for param in self.parameters():
-            param.requires_grad = True
-            param.volatile = False
-
-    def turn_grad_off(self):
-        for param in self.parameters():
-            param.requires_grad = False
-            param.volatile = True
 
 class Static_policy():
     def __init__(self, parameters):
@@ -438,9 +228,11 @@ class Agent_Pop:
                 if self.parameters.arch_type == "GRUMB":
                     self.pop.append(mod.PT_GRUMB(self.num_input, self.num_hidden, self.num_output, output_activation=self.parameters.output_activation))
                 elif self.parameters.arch_type == "FF":
-                    self.pop.append(FF(self.num_input, self.num_hidden, self.num_output))
+                    self.pop.append(mod.PT_FF(self.num_input, self.num_hidden, self.num_output, output_activation=self.parameters.output_activation))
                 elif self.parameters.arch_type == "LSTM":
-                    self.pop.append(LSTM(self.num_input, self.num_hidden, self.num_output))
+                    self.pop.append(mod.PT_LSTM(self.num_input, self.num_hidden, self.num_output, output_activation=self.parameters.output_activation))
+                elif self.parameters.arch_type == "QUASI_GRUMB":
+                    self.pop.append(mod.Quasi_GRUMB(self.num_input, self.num_hidden, self.num_output))
                 else:
                     sys.exit('Invalid choice of architecture')
         self.champion_ind = None
@@ -464,7 +256,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         self.parameters = parameters; self.ssne_param = self.parameters.ssne_param
         self.num_input = self.ssne_param.num_input; self.num_hidden = self.ssne_param.num_hnodes; self.num_output = self.ssne_param.num_output
 
-        self.ssne = mod.Fast_SSNE(parameters) #nitialize SSNE engine
+        if self.parameters.arch_type == 'QUASI_GRUMB': self.ssne = mod.Quasi_GRUMB_SSNE(parameters)
+        else: self.ssne = mod.Fast_SSNE(parameters) #nitialize SSNE engine
 
         #####Initiate all agents
         self.all_agents = []
@@ -490,11 +283,13 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
         sys.exit('PROBE COMPLETED')
 
     def save(self, individual, filename ):
-        torch.save(individual, filename)
+        mod.pickle_object(individual, filename)
+        #torch.save(individual, filename)
         #return individual.saver.save(individual.sess, self.save_foldername + filename)
 
     def load(self, filename):
-        return torch.load(self.save_foldername + filename)
+        return mod.unpickle(filename)
+        #return torch.load(filename)
 
     def predict(self, individual, input): #Runs the individual net and computes and output by feedforwarding
         return individual.predict(input)
@@ -543,7 +338,7 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             for individual, last_reward, is_agent in zip(team, team_last_rewards, team_last_is_agents):
                 try:
                     if individual.is_static: individual.new_trial = True
-                except: True
+                except: None
                 x = [0,  is_agent, last_reward]
                 #x = Variable(torch.Tensor([0,  is_agent, last_reward]), requires_grad=True); x = x.unsqueeze(0)
                 individual.fast_net.forward(x)
@@ -565,6 +360,8 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
 
 
             y = train_y[trial/(self.parameters.num_trials/3)]  # Pick the correct reward location
+
+
             #Reset reward and is_other agent, and also single rewards
             is_multi_success = True #Did all agents converge at reward?
             for i, individual in enumerate(team):
@@ -611,6 +408,29 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
                         is_explore = False
                         break
                 if is_explore: training_fitnesses[individual_id] += self.parameters.explore_reward
+
+
+        if self.parameters.spread_exp: #If spread experiment
+            #Global fitness Score
+            global_reward = 0.0
+            for trial in range(self.parameters.num_trials):  # For each trial
+                for individual_id in range(len(team)):
+                    if all_path_simulation[individual_id][1][trial] == 1: #Reward observed by some agent
+                        global_reward += 1.0/self.parameters.num_trials
+                        break
+            training_fitnesses = training_fitnesses * 0 + global_reward
+            real_fitness = global_reward
+
+            # #Difference fitness score
+            # difference_reward = np.zeros(len(team))
+            # for trial in range(self.parameters.num_trials):  # For each trial
+            #     obs = [all_path_simulation[i][1][trial] for i in range(len(team))]
+            #     if sum(obs) == 1: #unique observation
+            #         difference_reward[obs.index(1)] += 1.0/self.parameters.num_trials
+            # training_fitnesses[:] = difference_reward
+
+
+
 
         return training_fitnesses, real_fitness
 
@@ -707,7 +527,6 @@ class Task_Multi_TMaze: #Mulit-Agent T-Maze
             set_x.append(train_x); set_y.append(train_y)
 
         return set_x, set_y
-
 
 
 if __name__ == "__main__":
